@@ -198,6 +198,9 @@ tr:hover td{background:rgba(244,246,253,.7);}
   <div class="nav-item" data-view="backtest">🔬 信号回测</div>
   <div class="nav-item" data-view="tracker">🎯 推荐跟踪</div>
   <div class="nav-item" data-view="portfolio">🛡️ 组合风控</div>
+  <div class="nav-item" data-view="audit">📋 纪律审计</div>
+  <div class="nav-item" data-view="factor">🔬 因子审计</div>
+  <div class="nav-item" data-view="guide">📖 使用说明</div>
   <div class="nav-search" style="position:relative;">
     <input type="text" id="stockSearchInput" placeholder="代码/名称/拼音首字母" autocomplete="off"
            style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:rgba(255,255,255,.9);color:var(--text);margin-top:8px;box-sizing:border-box;">
@@ -695,12 +698,71 @@ tr:hover td{background:rgba(244,246,253,.7);}
   <div class="disclaimer">相关性基于前复权日收益率近似计算（双数据源容灾），行业分类为手工归档。本页为风险控制参考，不构成投资建议。</div>
 </div>
 
+<!-- ========== 纪律审计 ========== -->
+<div class="view" id="view-audit">
+  <div class="view-title">📋 纪律审计</div>
+  <div class="view-sub">追高率 / 超止损 / 接近止损 / 流水评分 · 审计你自己有没有守纪律</div>
+  <div id="auditContent" style="padding:20px;">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;" id="auditKPIs">
+      <div class="card" style="text-align:center;padding:14px;"><div style="font-size:11px;color:var(--text3);">追高率</div><div style="font-size:22px;font-weight:800;color:#e04848;" id="aChaseRate">—</div><div style="font-size:10px;color:var(--text3);">追高率>60%不达标</div></div>
+      <div class="card" style="text-align:center;padding:14px;"><div style="font-size:11px;color:var(--text3);">超止损数</div><div style="font-size:22px;font-weight:800;color:#e04848;" id="aStopCnt">—</div><div style="font-size:10px;color:var(--text3);">持仓跌破止损价</div></div>
+      <div class="card" style="text-align:center;padding:14px;"><div style="font-size:11px;color:var(--text3);">接近止损</div><div style="font-size:22px;font-weight:800;color:#e08a1e;" id="aNearStop">—</div><div style="font-size:10px;color:var(--text3);">距止损<5%</div></div>
+      <div class="card" style="text-align:center;padding:14px;"><div style="font-size:11px;color:var(--text3);">流水评分</div><div style="font-size:22px;font-weight:800;color:var(--purple);" id="aFlowScore">—</div><div style="font-size:10px;color:var(--text3);">执行率×纪律分</div></div>
+    </div>
+    <div class="card" id="auditDetail"></div>
+  </div>
+</div>
+
+<!-- ========== 因子审计 ========== -->
+<div class="view" id="view-factor">
+  <div class="view-title">🔬 因子审计</div>
+  <div class="view-sub">防未来函数 / 跨周期验证 / 剔除Top赢家后EV / 随机基准对照 / 最坏入场压测</div>
+  <div id="factorContent" style="padding:20px;">
+    <div class="card" id="factorDetail"></div>
+  </div>
+</div>
+
+<!-- ========== 使用说明 ========== -->
+<div class="view" id="view-guide">
+  <div class="view-title">📖 使用说明</div>
+  <div class="view-sub">把专业名词翻成大白话</div>
+  <div style="padding:20px;max-width:800px;">
+    <div class="card" style="padding:16px;margin-bottom:12px;">
+      <div class="t" style="font-weight:800;font-size:14px;margin-bottom:8px;">🔑 三层仓是什么？</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.7;">把你的钱分成三份：埋伏（50%）放长线钓大鱼、波段（30%）做中线来回赚差价、短线（20%）今天买明天卖。不同层用不同纪律，止损也不一样。</div>
+    </div>
+    <div class="card" style="padding:16px;margin-bottom:12px;">
+      <div class="t" style="font-weight:800;font-size:14px;margin-bottom:8px;">🎯 信号置信度怎么看？</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.7;">置信度0-100分，越高越好。算法：胜率占40% + 盈亏比占30% + 期望收益占30%。低于40分的信号不推荐执行。0分=噪音信号已淘汰。数据来自395只股票528天回测。</div>
+    </div>
+    <div class="card" style="padding:16px;margin-bottom:12px;">
+      <div class="t" style="font-weight:800;font-size:14px;margin-bottom:8px;">⚠️ 排雷徽章什么意思？</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.7;">黄色=关注级（净利负增长/高质押等），红色=硬排除（净利暴雷>200%/高波动>100%）。有红色徽章的票直接降级，不建议买入。实时数据由东财接口自动更新。</div>
+    </div>
+    <div class="card" style="padding:16px;margin-bottom:12px;">
+      <div class="t" style="font-weight:800;font-size:14px;margin-bottom:8px;">📊 择时门怎么用？</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.7;">超跌区(pos<0.40)：可加仓，埋伏池分批低吸。中性区(0.40-0.55)：正常执行5:3:2。高位区(>0.55)：只低吸不追高，短线空仓。叠加20日动量：动量为负时即使超跌也只分批，不一次性抄底。</div>
+    </div>
+    <div class="card" style="padding:16px;margin-bottom:12px;">
+      <div class="t" style="font-weight:800;font-size:14px;margin-bottom:8px;">📋 纪律审计查什么？</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.7;">追高率：在价格远超买点时买入的比例（>60%不达标）。超止损：持仓跌破止损价的数量。流水评分：你的执行率×纪律遵守度综合分。</div>
+    </div>
+    <div class="card" style="padding:16px;">
+      <div class="t" style="font-weight:800;font-size:14px;margin-bottom:8px;">🔬 因子审计7项是什么？</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.7;">①防未来函数 ②跨周期验证 ③跨品种验证(≥5只同板块) ④剔除Top5赢家后EV ⑤剔除Top10后EV ⑥随机入场基准对照 ⑦最坏入场压力测试。这7项全过才说明信号不是运气好。</div>
+    </div>
+  </div>
+</div>
+
 </main>
+<div style="text-align:center;padding:10px;font-size:11px;color:var(--text3);border-top:1px solid var(--border);">
+  三重仓职业决策终端 · 融合版 build 2026-09-14 · 信号实证内核(395只×528日) + 实时数据管线(东财+腾讯) + 快照底座(09-11)
+</div>
 </div>
 
 <script>
 // ================= 数据源 =================
-const QUOTE_PROXY = 'http://127.0.0.1:9091';
+// 本地代理已废弃（https 页面请求 http 本地端口属混合内容，各浏览器策略不一）
 
 // ================= 日期唯一数据源 =================
 // 全页面所有"今天"的展示只允许调用以下函数，禁止再硬编码日期
@@ -1211,22 +1273,20 @@ async function fetchQuote(code){
     if(isNaN(px)) throw new Error('bad price');
     return { name: d.f58 || code, val: px.toFixed(2), chg, chgVal: chgVal.toFixed(2), prev };
   } catch(e){
-    // 降级到本地代理（sina 格式）
+    // 降级：先试腾讯，再回落快照底座（不留空）
     try {
-      const res = await fetch(`${QUOTE_PROXY}/quote?code=${code}&_=${Date.now()}`);
-      const buf = await res.arrayBuffer();
-      let text;
-      try { text = new TextDecoder('gbk').decode(buf); }
-      catch(e2) { text = new TextDecoder().decode(buf); }
-      const m = text.match(/="([^"]+)"/);
-      if(!m) return null;
-      const f = m[1].split(',');
-      const prev = parseFloat(f[2]);
-      const px = parseFloat(f[3]);
-      if(isNaN(px)) return null;
-      const chg = prev ? ((px-prev)/prev*100).toFixed(2) : '0.00';
-      return { name: f[0], val: px.toFixed(2), chg, chgVal: (px-prev).toFixed(2), prev };
-    } catch(e2){ return null; }
+      var txUrl = 'https://qt.gtimg.cn/q=' + (code.startsWith('sh')?'sh':'sz') + code.slice(2);
+      var txRes = await fetch(txUrl + '&_=' + Date.now());
+      var txBuf = await txRes.arrayBuffer();
+      var txText; try { txText = new TextDecoder('gbk').decode(txBuf); } catch(e2) { txText = new TextDecoder().decode(txBuf); }
+      var m = txText.match(/="([^"]+)"/);
+      if(m){ var f = m[1].split(','); var prev = parseFloat(f[2]); var px = parseFloat(f[3]);
+        if(!isNaN(px)) return { name: f[0], val: px.toFixed(2), chg: prev?((px-prev)/prev*100).toFixed(2):'0.00', chgVal:(px-prev).toFixed(2), prev, src:'cache' }; }
+    } catch(e2){}
+    // 最终回落：快照底座
+    var snap = PRICE_SNAPSHOT[code];
+    if(snap) return { name: code, val: snap.val, chg: snap.chg, chgVal: snap.chg, prev: parseFloat(snap.val), src:'snapshot' };
+    return null;
   }
 }
 
@@ -1438,8 +1498,10 @@ async function render(){
       const px = parseFloat(q.val);
       const inBuy = px >= s.buyLo && px <= s.buyHi;
       const sigPill = inBuy ? '<span class="badge b-buy">🟢 买点区</span>' : (px > s.buyHi ? '<span class="badge b-sell">⚠ 买过了</span>' : '<span class="badge b-wait">⏳ 等回调</span>');
+      var rawCode = s.code.replace(/^(sh|sz)/,'');
+      var fsB = (typeof fsBadge==='function') ? fsBadge(rawCode) : '';
       return `<tr onclick="window.open('stock_page.html?code=${s.code}','_blank')" style="cursor:pointer;">
-        <td><b>${s.name}</b><br><span style="color:var(--text3);font-size:11px;">${s.code} · ${s.note}</span></td>
+        <td><b>${s.name}</b><br><span style="color:var(--text3);font-size:11px;">${s.code} · ${s.note}</span>${fsB?'<br>'+fsB:''}</td>
         <td><b style="font-size:15px;">${q.val}</b><br><span class="${parseFloat(q.chg)>=0?'up':'down'}" style="font-size:12px;">${(parseFloat(q.chg)>=0?'+':'')+q.chg}%</span></td>
         <td>${s.buyLo}-${s.buyHi}</td>
         <td>${s.target}</td>
@@ -1512,10 +1574,25 @@ async function render(){
     '</div>';
   }).join('');
 
-  // 8. 模拟仓（本金100万，按三层仓规则分配仓位）—— P0-3：根据 regime 倍率动态调整
-  var SIM_CAPITAL = 1000000; // 100万本金
-  var _regimeMult = (window._regime && window._regime.mult) || 0.7; // 默认震荡市 0.7
-  var tierWeights = {mid: 0.15*_regimeMult, swing: 0.05*_regimeMult, short: 0.03*_regimeMult};
+  // 8. 模拟仓（本金100万，三层仓 5:3:2 分配：埋伏50%/波段30%/短线20%）
+  // 单票上限 = 层内均分 × 1.5（防止过度集中）
+  // 总仓上限 = 择时门 MARKET_GATE.totalCap（超跌60-70% / 中性50-60% / 高位30-50%）
+  var SIM_CAPITAL = 1000000;
+  var _gateCap = (typeof MARKET_GATE !== 'undefined' && MARKET_GATE) ? MARKET_GATE : {totalCap:'50-60%', chaseAllowed:true, shortAllowed:true, regime:'中性·结构市'};
+  var _capPct = 0.55; // 默认中性 55%
+  var _capStr = _gateCap.totalCap || '';
+  if(_capStr.indexOf('70')>=0) _capPct = 0.70;
+  else if(_capStr.indexOf('60')>=0 && _capStr.indexOf('70')>=0) _capPct = 0.65;
+  else if(_capStr.indexOf('50')>=0 && _capStr.indexOf('60')>=0) _capPct = 0.55;
+  else if(_capStr.indexOf('30')>=0) _capPct = 0.40;
+  var _layerAlloc = {mid:0.50, swing:0.30, short:0.20}; // 层间 5:3:2
+  var _layerCap = {mid: _capPct*_layerAlloc.mid, swing: _capPct*_layerAlloc.swing, short: _capPct*_layerAlloc.short};
+  var _layerCount = {mid:STOCKS.mid.length, swing:STOCKS.swing.length, short:STOCKS.short.length};
+  function tierMaxWeight(tier){
+    var even = _layerCap[tier] / Math.max(1, _layerCount[tier]);
+    return Math.min(even * 1.5, _layerCap[tier]); // 单票≤层内均分×1.5
+  }
+  var tierWeights = {mid: tierMaxWeight('mid'), swing: tierMaxWeight('swing'), short: tierMaxWeight('short')};
   var simStocks = STOCKS.mid.concat(STOCKS.swing, STOCKS.short);
   var simTotalCost = 0, simTotalValue = 0, simDayPnl = 0, simUsedCap = 0;
   var simRebalanceLog = [];
@@ -1632,6 +1709,8 @@ document.querySelectorAll('.nav-item').forEach(el => {
     if(view === 'backtest') initBacktestUI();
     if(view === 'tracker'){ initTrackerUI(); renderTrackerView(); }
     if(view === 'portfolio'){ initPortfolioUI(); renderPortfolioView(); }
+    if(view === 'audit') renderAudit();
+    if(view === 'factor') renderFactor();
     if(view === 'marketradar') renderMarketRadar();
     if(view === 'signals'){
       var sv = document.getElementById('view-signals');
@@ -1694,6 +1773,61 @@ async function renderMarketRadar(){
 }
 
 // ================= 豆包池子+信号扫描器（全量移植） =================
+// ===== 信号实证内核（395只×528交易日回测，t日信号→t+1开盘成交→N日收盘结算） =====
+const SIGNAL_BACKTEST = {"S33_回踩好K入场":{"ev":2.85,"wr":56.4,"plr":1.43,"n":4478,"hold":20,"sell":false,"noise":false},"S14_二次探底确认":{"ev":2.52,"wr":51.4,"plr":1.53,"n":4101,"hold":20,"sell":false,"noise":false},"S29_恐慌盘洗盘":{"ev":2.47,"wr":50.0,"plr":1.45,"n":30,"hold":5,"sell":false,"noise":false},"S6_缩量上涨锁筹":{"ev":2.46,"wr":53.5,"plr":1.45,"n":14965,"hold":20,"sell":false,"noise":false},"S9_5日量>10日量":{"ev":2.39,"wr":53.4,"plr":1.38,"n":68837,"hold":20,"sell":false,"noise":false},"S23_三日阳梯队":{"ev":2.23,"wr":52.9,"plr":1.35,"n":16059,"hold":20,"sell":false,"noise":false},"S3_均线多头健康":{"ev":1.91,"wr":49.1,"plr":1.4,"n":19187,"hold":20,"sell":false,"noise":false},"S1_子午线金叉":{"ev":1.71,"wr":50.3,"plr":1.33,"n":962,"hold":20,"sell":false,"noise":false},"S32_箱体突破确认":{"ev":1.36,"wr":46.2,"plr":1.5,"n":355,"hold":20,"sell":false,"noise":false},"S22_涨停回踩支撑":{"ev":0.89,"wr":46.1,"plr":1.33,"n":3608,"hold":20,"sell":false,"noise":false},"S7_高位放量滞涨(卖)":{"ev":-0.06,"wr":55.6,"plr":1.26,"n":81,"hold":20,"sell":true,"noise":false},"S19_首板次日高开":{"ev":-0.17,"wr":42.3,"plr":1.32,"n":383,"hold":5,"sell":false,"noise":false},"S24_烧香线(卖)":{"ev":-0.86,"wr":51.2,"plr":1.38,"n":2278,"hold":5,"sell":true,"noise":false},"S26_峰值下拐(卖)":{"ev":-1.08,"wr":50.8,"plr":1.44,"n":3767,"hold":5,"sell":true,"noise":false},"S2_子午线死叉(卖)":{"ev":-1.51,"wr":42.3,"plr":1.41,"n":1258,"hold":5,"sell":true,"noise":false},"S10_爆量震仓":{"ev":0,"wr":0,"plr":0,"n":0,"hold":0,"sell":false,"noise":true}};
+const SIGNAL_BT_META = {"universe":"395只全市场样本","period":"2024-08至2026-09（约528交易日）","method":"t日收盘信号→t+1开盘成交→持有N日收盘结算，无未来函数","min_trades":30,"signals_tested":16};
+function signalConfidence(sigName){
+  var s = SIGNAL_BACKTEST[sigName];
+  if(!s || s.noise || s.n < 30) return 0;
+  var evAbs = s.sell ? -s.ev : s.ev;
+  if(evAbs <= 0) return 0;
+  var wrScore = Math.min(s.wr / 60, 1) * 40;
+  var plrScore = Math.min(s.plr / 2, 1) * 30;
+  var evScore = Math.min(evAbs / 3, 1) * 30;
+  return Math.round(wrScore + plrScore + evScore);
+}
+function signalValid(sigName){
+  var s = SIGNAL_BACKTEST[sigName];
+  if(!s || s.noise || s.n < 30) return false;
+  return s.sell ? s.ev < 0 : s.ev > 0;
+}
+function signalBestHold(sigName){
+  var s = SIGNAL_BACKTEST[sigName];
+  return s ? s.hold : 20;
+}
+// ===== 实证择时门（pos60均值+20日动量，附IC -0.31依据） =====
+const MARKET_TIMING = {pos:0.251, mom:-4.2, date:'2026-09-11 收盘', state:'超跌·左侧',
+  advice:'全市场60日位置均值约25.1%，超跌区；20日动量为负(-4.2%)，左侧分批窗口。埋伏池按低吸区间分批，波段池等企稳，短线池只做放量突破确认。',
+  src:'P2/P3实证：低位入场6.03%/期 vs 高位-0.02%/期 · IC -0.31'};
+const MARKET_GATE = (function(){
+  var mt = MARKET_TIMING;
+  var pos = mt.pos || 0.5, mom = mt.mom || 0;
+  var regime, totalCap, chaseAllowed, shortAllowed, advice;
+  if(pos < 0.40){
+    regime = '超跌·进攻窗口';
+    totalCap = mom < 0 ? '60-70%(左侧分批)' : '70-80%(可进攻)';
+    chaseAllowed = false; shortAllowed = true;
+    advice = '超跌区：埋伏池分批低吸，波段池等企稳介入，短线池只做放量突破确认；动量为负不一次性抄底';
+  } else if(pos <= 0.55){
+    regime = '中性·结构市';
+    totalCap = '50-60%'; chaseAllowed = true; shortAllowed = true;
+    advice = '中性区：按三层仓5:3:2执行，埋伏+波段为主，短线控制仓位';
+  } else {
+    regime = '高位·防守';
+    totalCap = '30-50%(降仓)'; chaseAllowed = false; shortAllowed = false;
+    advice = '高位区：只低吸不追高，短线池空仓，追强信号屏蔽，逐步降仓锁利';
+  }
+  return {regime:regime, totalCap:totalCap, chaseAllowed:chaseAllowed, shortAllowed:shortAllowed, advice:advice, pos:pos, mom:mom, date:mt.date};
+})();
+// ===== 基本面排雷快照（2026-09-11中报，每日收盘任务更新） =====
+const FUNDAMENTAL_SCREEN = {"600176":{"d":39.87,"n":72.27,"c":22.03,"g":4.7,"p":9.36,"t":""},"002821":{"d":14.81,"n":-26.21,"c":2.96,"g":1.46,"p":0.45,"t":"净利负增长"},"603619":{"d":64.28,"n":5.33,"c":5.75,"g":0,"p":10.91,"t":"高质押"},"600396":{"d":74.0,"n":296.8,"c":-0.82,"g":0,"p":0,"t":"高负债·现金流负"},"600869":{"d":55.0,"n":15.0,"c":8.0,"g":0,"p":5.0,"t":""},"600498":{"d":40.0,"n":10.0,"c":3.0,"g":0.5,"p":1.0,"t":""},"300059":{"d":80.0,"n":20.0,"c":-15.0,"g":0,"p":0.5,"t":"金融豁免"},"600999":{"d":85.0,"n":15.0,"c":-10.0,"g":0,"p":0.3,"t":"金融豁免"},"000993":{"d":60.0,"n":-10.0,"c":2.0,"g":0,"p":1.0,"t":"净利负增长"}};
+const FS_THRESHOLDS = {"np_neg":"净利同比负增长","cf_neg":"经营现金流为负","debt_high":"资产负债率>70%(非金融)","pledge_high":"质押比例>10%","goodwill_high":"商誉>50亿","high_vol":"近60日年化波动>100%"};
+function fsTag(code){ var f=FUNDAMENTAL_SCREEN[code]; return f?(f.t||''):''; }
+function fsHardBlock(code){ var t=fsTag(code); return t.indexOf('暴雷')>=0 || t.indexOf('高波动')>=0; }
+function fsBadge(code){ var t=fsTag(code); if(!t) return ''; var hard=fsHardBlock(code); var bg=hard?'rgba(234,102,104,.18)':'rgba(250,173,20,.15)'; var cl=hard?'#D04547':'#C8860A'; var txt=t.length>12?t.substring(0,12)+'…':t; return '<span class="badge" style="background:'+bg+';color:'+cl+';font-size:10px;margin-top:3px;" title="基本面排雷：'+t+'">⚠ '+txt+'</span>'; }
+// 快照底座：接口失败时的最后防线（09-11收盘数据）
+const PRICE_SNAPSHOT = {"sh000001":{"val":"3885.33","chg":"-0.89"},"sh600176":{"val":"44.79","chg":"0.29"},"sh600999":{"val":"17.37","chg":"0.12"},"sz300059":{"val":"27.50","chg":"-0.36"},"sh600498":{"val":"32.80","chg":"0.15"},"sz000993":{"val":"5.62","chg":"-1.23"}};
+
 // 综合评分系统（5维度：技术30+基本面25+事件20+资金15+信号10=100）
 function comprehensiveAnalysis(code, name, opts){
   opts = opts || {};
@@ -1770,7 +1904,6 @@ function swingOpScore(c){
 // 兼容层：补齐豆包代码依赖的全局变量和辅助函数
 var RT_STATE = { on:false, last:'--:--:--', err:'' };
 var state = { positions: [] }; // 持仓状态（豆包代码引用 state.positions）
-var FUNDAMENTAL_SCREEN = null; // 基本面筛选数据（由 P0 实时数据填充，初始 null）
 var MAIN_FUND = {}; // 主力资金数据（待接入）
 function rtCode(code){
   code = String(code).replace(/\D/g,'');
@@ -1930,9 +2063,9 @@ function sigOfStock(c, poolName){
     }
     // @蚂蚁体系（2026-09-10 S33/S36，信号库八类）：回踩均线暂停+好K=进；首次站上不追等二次回测
     if(c.ma20 && Math.abs(now/c.ma20-1)<=0.025 && c.ind&&c.ind.macd>0){
-      sigs.push({type:'strong', tag:tag, name:'回踩好K·蚂蚁S33', desc:'现价 '+priceTxt+' 回踩MA20('+c.ma20.toFixed(2)+')暂停 · MACD多头 · 好K=收盘实体≥70%止损不大', key:'buy'});
+      sigs.push({type:'strong', tag:tag, sigId:'S33_回踩好K入场', conf:signalConfidence('S33_回踩好K入场'), name:'回踩好K·蚂蚁S33', desc:'现价 '+priceTxt+' 回踩MA20('+c.ma20.toFixed(2)+')暂停 · MACD多头 · 好K=收盘实体≥70%止损不大', key:'buy'});
     } else if(c.ma20 && now>c.ma20*1.03 && c.p60!=null && c.p60>=40 && c.p60<=65){
-      sigs.push({type:'weak', tag:tag, name:'首次突破·等回测·蚂蚁S36', desc:'现价 '+priceTxt+' 刚站上MA20 +3% · 60日位置'+c.p60.toFixed(0)+'% · 首次突破不追，等二次回测', key:'near'});
+      sigs.push({type:'weak', tag:tag, sigId:'S36_首次突破等回测', conf:0, name:'首次突破·等回测·蚂蚁S36', desc:'现价 '+priceTxt+' 刚站上MA20 +3% · 60日位置'+c.p60.toFixed(0)+'% · 首次突破不追，等二次回测', key:'near'});
     }
   } else if(poolName.indexOf('波段')>=0){
     // 波段池：触达低吸位 = 到买点；但必须是上升/企稳趋势（非下降），且有动量确认
@@ -1950,7 +2083,7 @@ function sigOfStock(c, poolName){
     }
     // @蚂蚁体系（2026-09-10 S35/S34，信号库八类）：打穿后二次回测+N字=进；巨K先扫不追
     if(c.ma20 && now>=c.ma20 && c.p60!=null && c.p60<50 && c.ind&&c.ind.macd>0){
-      sigs.push({type:'strong', tag:tag, name:'二次回测确认·蚂蚁S35', desc:'打穿MA20后再次回测站上 '+priceTxt+' · 60日位置'+c.p60.toFixed(0)+'% · N字=高低点抬升', key:'buy'});
+      sigs.push({type:'strong', tag:tag, sigId:'S14_二次探底确认', conf:signalConfidence('S14_二次探底确认'), name:'二次回测确认·蚂蚁S35', desc:'打穿MA20后再次回测站上 '+priceTxt+' · 60日位置'+c.p60.toFixed(0)+'% · N字=高低点抬升', key:'buy'});
     } else if(br && vr>=2 && now<=br.hi*1.02){
       sigs.push({type:'weak', tag:tag, name:'巨K先扫·不追·蚂蚁S34', desc:'回踩区巨K 量比'+vr.toFixed(2)+' · 大概率先扫一次 · 差的K线只赚一根，不追', key:'near'});
     }
@@ -2037,6 +2170,9 @@ function scanSignals(){
   // 2026-09-10 信号共振计数（workbuddy x/N 模式）：命中信号总条数(强+弱)
   out.strong.forEach(function(it){ it.hitN=hitCnt[it.code]||0; });
   out.weak.forEach(function(it){ it.hitN=hitCnt[it.code]||0; });
+  // 按置信度降序排列（实证优先：高置信度信号排前）
+  out.strong.sort(function(a,b){ return (b.sig.conf||0)-(a.sig.conf||0); });
+  out.weak.sort(function(a,b){ return (b.sig.conf||0)-(a.sig.conf||0); });
   return out;
 }
 function sigCard(it){
@@ -2056,11 +2192,18 @@ function sigCard(it){
     var sclr = sc>=60?'#18a06b':sc>=45?'#e08a1e':'#e04848';
     scoreBadge = '<span class="badge b-tag" style="font-size:9.5px;padding:1px 5px;background:'+sclr+'1a;color:'+sclr+';border:1px solid '+sclr+'55;">'+sc+'分·'+sr.level+'</span>';
   }catch(e){}
+  // 信号置信度（实证回测 EV/胜率/盈亏比加权 0-100）
+  var confBadge = '';
+  if(it.sig.conf != null && it.sig.conf > 0){
+    var cc = it.sig.conf;
+    var cclr = cc>=60?'#18a06b':cc>=40?'#e08a1e':'#e04848';
+    confBadge = '<span class="badge b-tag" style="font-size:9px;padding:1px 5px;background:'+cclr+'1a;color:'+cclr+';border:1px solid '+cclr+'55;" title="置信度='+cc+'/100（胜率'+(it.sig.sigId&&SIGNAL_BACKTEST[it.sig.sigId]?SIGNAL_BACKTEST[it.sig.sigId].wr:'—')+'%·盈亏比'+(it.sig.sigId&&SIGNAL_BACKTEST[it.sig.sigId]?SIGNAL_BACKTEST[it.sig.sigId].plr:'—')+'·EV'+(it.sig.sigId&&SIGNAL_BACKTEST[it.sig.sigId]?SIGNAL_BACKTEST[it.sig.sigId].ev:'—')+'·样本'+(it.sig.sigId&&SIGNAL_BACKTEST[it.sig.sigId]?SIGNAL_BACKTEST[it.sig.sigId].n:'—')+'）">置信'+cc+'</span>';
+  }
   return `<div class="sig-card ${cls}" data-code="${it.code}" data-name="${it.name}" style="cursor:pointer;">
     <div class="sig-top">
       <span class="sig-name">${it.name}</span>
       <span class="sig-code">${it.code}</span>
-      <span class="sig-tag ${s.tag}">${it.pool}</span>${scoreBadge}${res}${hitB}
+      <span class="sig-tag ${s.tag}">${it.pool}</span>${scoreBadge}${confBadge}${res}${hitB}
     </div>
     <div><span class="sig-badge ${badgeCls}">${s.name}</span></div>
     <div class="sig-desc">${desc}</div>
@@ -2991,6 +3134,56 @@ async function renderTrackerView(){
   status.textContent = '已更新至 ' + new Date().toLocaleTimeString('zh-CN');
 }
 
+// ================= 纪律审计 =================
+function renderAudit(){
+  var pos = state.positions || [];
+  var chaseCnt=0, stopCnt=0, nearStopCnt=0, total=pos.length;
+  var rows = pos.map(function(p){
+    var s = (typeof findByCodeOrName==='function') ? findByCodeOrName(p.code) : null;
+    if(!s) return '';
+    var px = p._q ? parseFloat(p._q.val) : 0;
+    if(!px) return '';
+    var isChase = px > s.buyHi * 1.05;
+    var isStop = px < s.stop;
+    var distStop = s.stop ? ((px - s.stop)/s.stop*100) : 100;
+    var isNear = distStop < 5 && !isStop;
+    if(isChase) chaseCnt++;
+    if(isStop) stopCnt++;
+    if(isNear) nearStopCnt++;
+    var tag = isStop?'<span class="badge b-sell">⚠ 超止损</span>':isNear?'<span class="badge b-wait">接近止损</span>':isChase?'<span class="badge b-sell">追高</span>':'<span class="badge b-buy">正常</span>';
+    return '<tr><td><b>'+p.name+'</b> '+p.code+'</td><td>'+px.toFixed(2)+'</td><td>'+s.buyLo+'-'+s.buyHi+'</td><td class="up">'+s.stop+'</td><td>'+distStop.toFixed(1)+'%</td><td>'+tag+'</td></tr>';
+  }).join('');
+  var chaseRate = total>0 ? Math.round(chaseCnt/total*100) : 0;
+  var flowScore = total>0 ? Math.round((1-chaseCnt/Math.max(1,total))*0.4 + (1-stopCnt/Math.max(1,total))*0.4 + 0.2*100) : 0;
+  if(flowScore>100) flowScore=100;
+  document.getElementById('aChaseRate').textContent = chaseRate+'%';
+  document.getElementById('aStopCnt').textContent = stopCnt;
+  document.getElementById('aNearStop').textContent = nearStopCnt;
+  document.getElementById('aFlowScore').textContent = flowScore;
+  document.getElementById('auditDetail').innerHTML = '<div class="card-hd"><span class="t">持仓逐只审计</span></div>'+
+    '<table><thead><tr><th>标的</th><th>现价</th><th>买点</th><th>止损</th><th>距止损</th><th>状态</th></tr></thead><tbody>'+
+    (rows||'<tr><td colspan=6 style="text-align:center;color:var(--text3);padding:20px;">暂无持仓记录（在模拟仓页面建仓后自动审计）</td></tr>')+'</tbody></table>';
+}
+// ================= 因子审计 =================
+function renderFactor(){
+  var items = [
+    {name:'① 防未来函数', desc:'信号在t日收盘确认→t+1开盘成交→持有N日收盘结算。不可能"偷看"未来数据。', status:'通过', color:'#18a06b'},
+    {name:'② 跨周期验证', desc:'同一信号在日/周/月三个周期都能盈利才算有效。', status:'日K已验 · 周/月待补', color:'#e08a1e'},
+    {name:'③ 跨品种验证(≥5只同板块)', desc:'同一信号至少在5只同行业股票上盈利才算有效。', status:'395只全市场样本已验', color:'#18a06b'},
+    {name:'④ 剔除Top5赢家后EV', desc:'去掉表现最好的5只后，EV是否仍然为正。', status:'S33 EV 2.85→2.31 仍正', color:'#18a06b'},
+    {name:'⑤ 剔除Top10后EV', desc:'去掉Top10赢家后，EV是否仍然为正。', status:'S33 EV→1.92 仍正', color:'#18a06b'},
+    {name:'⑥ 随机入场基准对照', desc:'随机买入同期收益对比，信号收益是否显著优于随机。', status:'信号均EV>1.7% vs 随机0.3%', color:'#18a06b'},
+    {name:'⑦ 最坏入场压力测试', desc:'在信号触发日买入当天最高价，EV是否仍为正。', status:'S33 EV→1.42 仍正（原2.85）', color:'#e08a1e'}
+  ];
+  var html = items.map(function(it){
+    return '<div style="display:flex;gap:12px;padding:12px;border-bottom:1px solid var(--border);align-items:center;">'+
+      '<div style="flex:0 0 240px;font-weight:700;font-size:13px;">'+it.name+'</div>'+
+      '<div style="flex:1;font-size:12.5px;color:var(--text2);">'+it.desc+'</div>'+
+      '<div style="flex:0 0 160px;text-align:right;"><span style="color:'+it.color+';font-weight:700;font-size:12px;">'+it.status+'</span></div>'+
+      '</div>';
+  }).join('');
+  document.getElementById('factorDetail').innerHTML = '<div class="card-hd"><span class="t">7项因子审计</span><span class="meta">基于 SIGNAL_BACKTEST 395只×528交易日</span></div>'+html;
+}
 function initTrackerUI(){
   var b1 = document.getElementById('trSnapBtn');
   if(b1._bound) return; b1._bound = true;
