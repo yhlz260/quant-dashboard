@@ -78,25 +78,39 @@ tr:hover td{background:rgba(244,246,253,.7);}
 
 /* ===== 信号捕捉三色网格 ===== */
 .sig-board{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+@media(max-width:760px){.sig-board{grid-template-columns:repeat(2,1fr);}}
 .sig-card{display:flex;flex-direction:column;gap:7px;padding:11px 13px;border-radius:13px;border:1.5px solid;min-width:0;cursor:pointer;}
 .sig-card.red{border-color:rgba(255,77,79,.55);background:linear-gradient(130deg,rgba(255,77,79,.10),rgba(255,164,54,.06));}
 .sig-card.green{border-color:rgba(52,199,123,.55);background:linear-gradient(130deg,rgba(52,199,123,.10),rgba(111,98,244,.05));}
 .sig-card.yellow{border-color:rgba(233,161,61,.55);background:linear-gradient(130deg,rgba(233,161,61,.10),rgba(255,77,79,.04));}
 .sig-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
-.sig-name{font-size:14.5px;font-weight:800;}
+.sig-name{font-size:14.5px;font-weight:800;color:var(--text);}
 .sig-code{font-size:11px;color:var(--text3);font-weight:600;}
+.sig-tag{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700;}
+.sig-tag.mid{background:rgba(111,98,244,.12);color:#6f62f4;}
+.sig-tag.sw{background:rgba(52,199,123,.12);color:#34c77b;}
+.sig-tag.sh{background:rgba(255,77,79,.12);color:#ff4d4f;}
+.sig-badge{font-size:10px;padding:1.5px 7px;border-radius:10px;font-weight:700;}
+.sig-badge.red-b{background:rgba(255,77,79,.14);color:#e03a3c;}
+.sig-badge.green-b{background:rgba(52,199,123,.14);color:#1f9e63;}
+.sig-badge.yellow-b{background:rgba(233,161,61,.14);color:#c77f12;}
 .sig-desc{font-size:11px;color:var(--text2);line-height:1.5;}
+.sig-empty{padding:20px;text-align:center;color:var(--text3);font-size:13px;border:1.5px dashed rgba(138,146,168,.4);border-radius:14px;background:rgba(244,246,253,.4);grid-column:1/-1;}
+.sig-bar{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--purple);background:rgba(111,98,244,.08);border:1px solid rgba(111,98,244,.25);border-radius:16px;padding:3px 12px;margin-bottom:10px;}
+.sig-dot{width:7px;height:7px;border-radius:50%;background:#ff4d4f;animation:sigBlink 1s ease-in-out infinite;}
+@keyframes sigBlink{0%,100%{opacity:1;}50%{opacity:.25;}}
 .sig-progress{height:6px;border-radius:3px;background:rgba(0,0,0,.08);margin-top:3px;overflow:hidden;}
 .sig-progress .bar{height:100%;border-radius:3px;}
 .sig-card.red .bar{background:#ff4d4f;}
 .sig-card.green .bar{background:#34c77b;}
 .sig-card.yellow .bar{background:#e9a13d;}
-.sig-legend{display:flex;gap:12px;margin-bottom:10px;font-size:11px;color:var(--text2);}
+.sig-legend{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;color:var(--text2);}
 .sig-legend .lg{display:inline-flex;align-items:center;gap:5px;}
 .sig-legend .swatch{width:11px;height:11px;border-radius:3px;border:1.5px solid;}
 .sig-legend .swatch.r{background:rgba(255,77,79,.25);border-color:rgba(255,77,79,.6);}
 .sig-legend .swatch.g{background:rgba(52,199,123,.25);border-color:rgba(52,199,123,.6);}
 .sig-legend .swatch.y{background:rgba(233,161,61,.25);border-color:rgba(233,161,61,.6);}
+.badge.b-tag{font-size:9.5px;padding:1px 6px;border-radius:8px;font-weight:700;}
 
 /* ===== 波段监控进度条 ===== */
 .mon-bar{display:flex;align-items:center;gap:10px;}
