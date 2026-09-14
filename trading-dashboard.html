@@ -770,6 +770,41 @@ const STOCKS = {
     {code:'sz000333', name:'美的集团', buyLo:56, buyHi:58, target:68, stop:52, tier:'swing', note:'家电龙头·出海+高股息'},
     {code:'sh600036', name:'招商银行', buyLo:30, buyHi:32, target:38, stop:28, tier:'swing', note:'银行龙头·低估值·高股息'},
     {code:'sh601318', name:'中国平安', buyLo:44, buyHi:46, target:55, stop:41, tier:'swing', note:'保险龙头·顺周期·低估值'},
+    // === 豆包波段池扩充（低位/中位品种，带预计算指标） ===
+    {code:'sh600237', name:'铜峰电子', buyLo:8.2, buyHi:8.5, target:10.33, stop:7.54, tier:'swing', note:'扫描共振3·60日位置30%·空头低位'},
+    {code:'sz002179', name:'中航光电', buyLo:33.51, buyHi:34.0, target:47.68, stop:30.83, tier:'swing', note:'扫描共振3·60日位置22%·空头低位'},
+    {code:'sz301155', name:'海力风电', buyLo:39.18, buyHi:40.0, target:52.25, stop:36.05, tier:'swing', note:'扫描共振3·60日位置26%·空头低位'},
+    {code:'sz301013', name:'利和兴', buyLo:38.44, buyHi:39.0, target:42.13, stop:35.36, tier:'swing', note:'扫描共振3·60日位置12%·高波动降级'},
+    {code:'sh600350', name:'山东高速', buyLo:10.07, buyHi:10.3, target:13.62, stop:9.26, tier:'swing', note:'箱体波段·60日位置8%·空头低位'},
+    {code:'sz002475', name:'立讯精密', buyLo:54.15, buyHi:55.0, target:76.92, stop:49.82, tier:'swing', note:'箱体波段·60日位置15%·空头低位'},
+    {code:'sz002129', name:'TCL中环', buyLo:8.75, buyHi:9.0, target:9.92, stop:7.97, tier:'swing', note:'用户认可·60日位置10%·空头低位'},
+    {code:'sh603341', name:'龙旗科技', buyLo:36.0, buyHi:36.5, target:45.87, stop:33.12, tier:'swing', note:'用户认可·60日位置4%·空头低位'},
+    {code:'sz300738', name:'奥飞数据', buyLo:20.02, buyHi:20.5, target:24.42, stop:18.42, tier:'swing', note:'成长宽幅·60日位置12%·空头低位'},
+    {code:'sz000962', name:'东方钽业', buyLo:47.61, buyHi:48.85, target:55.54, stop:46.12, tier:'swing', note:'强趋势·60日位置16%·空头低位'},
+    {code:'sz002134', name:'天津普林', buyLo:21.84, buyHi:22.2, target:25.09, stop:20.16, tier:'swing', note:'假阴突破·60日位置35%·S14二次探底'},
+    {code:'sh600030', name:'中信证券', buyLo:26.68, buyHi:27.0, target:30.18, stop:24.55, tier:'swing', note:'箱体波段·60日位置15%·空头低位'},
+    {code:'sh601138', name:'工业富联', buyLo:61.65, buyHi:62.5, target:79.55, stop:56.72, tier:'swing', note:'箱体波段·60日位置44%·多头回踩'},
+    {code:'sh601901', name:'方正证券', buyLo:6.63, buyHi:6.8, target:7.79, stop:6.1, tier:'swing', note:'网格震荡·60日位置22%·空头低位'},
+    {code:'sh600958', name:'东方证券', buyLo:8.83, buyHi:9.0, target:9.83, stop:8.12, tier:'swing', note:'网格震荡·60日位置17%·空头低位'},
+    {code:'sh600096', name:'云天化', buyLo:29.67, buyHi:30.0, target:34.78, stop:27.3, tier:'swing', note:'箱体波段·60日位置37%·空头中位'},
+    {code:'sh601377', name:'兴业证券', buyLo:5.7, buyHi:5.8, target:6.34, stop:5.24, tier:'swing', note:'网格震荡·60日位置25%·空头低位'},
+    {code:'sh601000', name:'唐山港', buyLo:4.43, buyHi:4.5, target:5.08, stop:4.08, tier:'swing', note:'箱体波段·60日位置53%·多头回踩'},
+    {code:'sz000538', name:'云南白药', buyLo:48.72, buyHi:49.5, target:54.43, stop:44.82, tier:'swing', note:'箱体波段·60日位置58%·空头中位'},
+    {code:'sh601628', name:'中国人寿', buyLo:36.91, buyHi:37.5, target:42.42, stop:33.96, tier:'swing', note:'箱体波段·60日位置58%·空头中位'},
+    {code:'sh601108', name:'财通证券', buyLo:8.35, buyHi:8.5, target:9.35, stop:7.68, tier:'swing', note:'网格震荡·60日位置42%·空头中位'},
+    {code:'sh601225', name:'陕西煤业', buyLo:25.41, buyHi:26.0, target:28.13, stop:23.26, tier:'swing', note:'用户认可·60日位置78%·多头高位防守'},
+    {code:'sh601728', name:'中国电信', buyLo:6.08, buyHi:6.2, target:6.79, stop:5.59, tier:'swing', note:'箱体波段·60日位置86%·多头高位'},
+    {code:'sh600886', name:'国投电力', buyLo:13.62, buyHi:14.0, target:15.62, stop:12.53, tier:'swing', note:'箱体波段·60日位置81%·多头高位'},
+    {code:'sh601666', name:'平煤股份', buyLo:9.25, buyHi:9.5, target:10.36, stop:8.15, tier:'swing', note:'箱体波段·60日位置70%·多头高位'},
+    {code:'sz002493', name:'荣盛石化', buyLo:13.6, buyHi:14.0, target:15.43, stop:11.97, tier:'swing', note:'箱体波段·60日位置65%·多头高位'},
+    {code:'sz001872', name:'招商港口', buyLo:22.5, buyHi:23.0, target:25.21, stop:20.57, tier:'swing', note:'箱体波段·60日位置75%·多头高位'},
+    {code:'sh688448', name:'磁谷科技', buyLo:63.76, buyHi:65.0, target:73.62, stop:54.61, tier:'swing', note:'用户认可·60日位置80%·多头高位'},
+    {code:'sh600309', name:'万华化学', buyLo:72.62, buyHi:73.5, target:80.46, stop:66.81, tier:'swing', note:'箱体波段·60日位置70%·多头高位'},
+    {code:'sh601872', name:'招商轮船', buyLo:19.91, buyHi:20.5, target:23.05, stop:17.88, tier:'swing', note:'强趋势·60日位置86%·S3均线多头'},
+    {code:'sh600803', name:'新奥股份', buyLo:17.76, buyHi:18.0, target:20.54, stop:16.25, tier:'swing', note:'箱体波段·60日位置88%·多头高位'},
+    {code:'sh601398', name:'工商银行', buyLo:7.7, buyHi:7.8, target:8.76, stop:7.08, tier:'swing', note:'箱体波段·60日位置87%·多头高位'},
+    {code:'sh601985', name:'中国核电', buyLo:8.63, buyHi:8.8, target:9.77, stop:7.94, tier:'swing', note:'箱体波段·60日位置76%·多头高位'},
+    {code:'sh600018', name:'上港集团', buyLo:5.17, buyHi:5.3, target:5.93, stop:4.76, tier:'swing', note:'箱体波段·60日位置90%·多头高位'},
   ],
   short: [
     {code:'sz000993', name:'闽东电力', buyLo:10.8, buyHi:11.2, target:12.5, stop:10.3, tier:'short', note:'绿电+2连板回踩'},
@@ -1422,9 +1457,13 @@ async function render(){
     const q = s._q; if(!q) return '';
     const px = parseFloat(q.val);
     const pct = ((s.target-px)/px*100).toFixed(1);
+    // 综合评分
+    var sc='—', sclr='var(--text3)';
+    try{ var sr=comprehensiveAnalysis(s.code.replace(/^(sh|sz)/,''), s.name); sc=sr.totalScore; sclr=sr.totalScore>=60?'#18a06b':sr.totalScore>=45?'#e08a1e':'#e04848'; }catch(e){}
     return `<tr onclick="window.open('stock_page.html?code=${s.code}','_blank')" style="cursor:pointer;">
       <td><b>${s.name}</b> <span style="color:var(--text3);font-size:11px;">${s.code}</span></td>
       <td><b>${q.val}</b> <span class="${parseFloat(q.chg)>=0?'up':'down'}">${(parseFloat(q.chg)>=0?'+':'')+q.chg}%</span></td>
+      <td><b style="color:${sclr};">${sc}</b>/100</td>
       <td>${s.buyLo}-${s.buyHi}</td>
       <td>${s.target}（+${pct}%）</td>
       <td class="up">${s.stop}</td>
@@ -1432,7 +1471,7 @@ async function render(){
     </tr>`;
   }).join('');
   document.getElementById('swingMonitor').innerHTML = `
-    <table><thead><tr><th>标的</th><th>现价</th><th>买点</th><th>目标</th><th>止损</th><th>当前位置</th></tr></thead><tbody>${swingRows}</tbody></table>`;
+    <table><thead><tr><th>标的</th><th>现价</th><th>评分</th><th>买点</th><th>目标</th><th>止损</th><th>当前位置</th></tr></thead><tbody>${swingRows}</tbody></table>`;
 
   // 7. 今日推荐（卡片式布局，各信息分区清晰）—— P0 过滤：剔除事件/基本面否决票
   const filteredRecs = RECOMMENDS.filter(r => {
@@ -1655,9 +1694,84 @@ async function renderMarketRadar(){
 }
 
 // ================= 豆包池子+信号扫描器（全量移植） =================
+// 综合评分系统（5维度：技术30+基本面25+事件20+资金15+信号10=100）
+function comprehensiveAnalysis(code, name, opts){
+  opts = opts || {};
+  var techScore = 15, techDetails = [];
+  var poolData = (typeof findByCodeOrName === 'function') ? findByCodeOrName(code) : null;
+  if(poolData){
+    var ind = poolData.ind || {};
+    if(ind.macd > 0){ techScore += 3; techDetails.push('MACD金叉'); }
+    if(ind.kdj != null && ind.kdj < 30){ techScore += 2; techDetails.push('KDJ低位'); }
+    if(ind.cci > 100){ techScore += 3; techDetails.push('CCI强势'); }
+    if(ind.adx >= 25){ techScore += 2; techDetails.push('ADX趋势'); }
+    if(poolData.ma20 && poolData.ma60 && poolData.ma20 > poolData.ma60){ techScore += 4; techDetails.push('均线多头'); }
+    if(poolData.p60 != null && poolData.p60 < 40){ techScore += 5; techDetails.push('60日低位'); }
+    if(poolData.vr > 1.5){ techScore += 3; techDetails.push('放量'); }
+    if(poolData.vg && poolData.vg.st === 'multi'){ techScore += 3; techDetails.push('Vegas多头'); }
+    techScore = Math.min(techScore, 30);
+  }
+  var fundScore = 12, fundDetails = [];
+  var fs = (typeof FUNDAMENTAL_SCREEN !== 'undefined' && FUNDAMENTAL_SCREEN) ? FUNDAMENTAL_SCREEN[code] : null;
+  if(fs){
+    if(fs.netProfitGrowth != null && fs.netProfitGrowth > 0){ fundScore += 5; fundDetails.push('净利正增长'); }
+    if(fs.operatingCashFlow > 0){ fundScore += 4; fundDetails.push('现金流正'); }
+    if(fs.debtRatio != null && fs.debtRatio < 60){ fundScore += 3; fundDetails.push('负债率合理'); }
+    if(fs.pledgeRatio != null && fs.pledgeRatio < 30){ fundScore += 3; fundDetails.push('质押低'); }
+    if(fs.goodwillRatio != null && fs.goodwillRatio < 20){ fundScore += 3; fundDetails.push('商誉低'); }
+    if(fs.hardBlock){ fundScore -= 10; fundDetails.push('⚠️排雷硬排除'); }
+    fundScore = Math.max(0, Math.min(fundScore, 25));
+  } else { fundDetails.push('基本面数据待更新'); }
+  var eventScore = 10, eventDetails = ['事件面数据待更新'];
+  var fundFlowScore = 7, fundFlowDetails = [];
+  var mf = (typeof MAIN_FUND !== 'undefined' && MAIN_FUND[code]) ? MAIN_FUND[code] : null;
+  if(mf){
+    if(mf.netInflow > 5000){ fundFlowScore += 8; fundFlowDetails.push('主力大幅流入'); }
+    else if(mf.netInflow > 1000){ fundFlowScore += 5; fundFlowDetails.push('主力净流入'); }
+    else if(mf.netInflow < -5000){ fundFlowScore -= 8; fundFlowDetails.push('主力大幅流出'); }
+    else if(mf.netInflow < -1000){ fundFlowScore -= 5; fundFlowDetails.push('主力净流出'); }
+    fundFlowScore = Math.max(0, Math.min(fundFlowScore, 15));
+  } else { fundFlowDetails.push('资金数据待更新'); }
+  var signalScore = 5, signalDetails = [];
+  if(poolData && poolData.kf){
+    var signalMatch = poolData.kf.match(/信号(\d+)/);
+    if(signalMatch){
+      var sigCount = parseInt(signalMatch[1]);
+      signalScore = Math.min(sigCount * 2, 10);
+      signalDetails.push(sigCount+'条信号共振');
+    }
+  }
+  var totalScore = techScore + fundScore + eventScore + fundFlowScore + signalScore;
+  var level, conclusion;
+  if(totalScore >= 75){ level='强烈关注'; conclusion='多维度共振，可重点关注'; }
+  else if(totalScore >= 60){ level='积极关注'; conclusion='多数维度向好，可纳入观察池'; }
+  else if(totalScore >= 45){ level='中性观察'; conclusion='多维度分化，暂不急于介入'; }
+  else if(totalScore >= 30){ level='谨慎观望'; conclusion='多数维度偏弱，建议回避或等待'; }
+  else { level='回避'; conclusion='多维度走弱，风险较大'; }
+  return { totalScore:totalScore, level:level, conclusion:conclusion,
+    dimensions:{ tech:{score:techScore,max:30,details:techDetails},
+      fundamental:{score:fundScore,max:25,details:fundDetails},
+      event:{score:eventScore,max:20,details:eventDetails},
+      fundFlow:{score:fundFlowScore,max:15,details:fundFlowDetails},
+      signal:{score:signalScore,max:10,details:signalDetails} },
+    timestamp:new Date().toISOString().slice(0,10) };
+}
+// 波段操作分 = 质地分(含战法) + 60日位置调整
+function swingOpScore(c){
+  var base = (c.score!=null?c.score:60) + (c.tact?3:0);
+  var p = c.p60!=null ? c.p60 : 50;
+  var adj = 0;
+  if(p<20) adj=15; else if(p<40) adj=8; else if(p<60) adj=0; else if(p<80) adj=-10; else adj=-20;
+  if((c.pos||'').indexOf('下降')>=0) adj-=25;
+  if((c.pos||'').indexOf('破止损')>=0) adj-=25;
+  var op = base+adj;
+  return op<0?0:Math.round(op);
+}
 // 兼容层：补齐豆包代码依赖的全局变量和辅助函数
 var RT_STATE = { on:false, last:'--:--:--', err:'' };
 var state = { positions: [] }; // 持仓状态（豆包代码引用 state.positions）
+var FUNDAMENTAL_SCREEN = null; // 基本面筛选数据（由 P0 实时数据填充，初始 null）
+var MAIN_FUND = {}; // 主力资金数据（待接入）
 function rtCode(code){
   code = String(code).replace(/\D/g,'');
   if(code.length<6) return '';
@@ -1934,11 +2048,19 @@ function sigCard(it){
   var desc = esc(s.desc);
   var res = it.resonance?'<span class="badge b-tag" style="font-size:9.5px;padding:1px 6px;">共振</span>':'';
   var hitB = (it.hitN&&it.hitN>=2)?'<span class="badge b-tag" style="font-size:9.5px;padding:1px 6px;background:rgba(99,102,241,.12);color:#6366F1;border:1px solid rgba(99,102,241,.3);">命中'+it.hitN+'信号</span>':'';
+  // 综合评分（5维度：技术30+基本面25+事件20+资金15+信号10=100）
+  var scoreBadge = '';
+  try{
+    var sr = comprehensiveAnalysis(it.code, it.name);
+    var sc = sr.totalScore;
+    var sclr = sc>=60?'#18a06b':sc>=45?'#e08a1e':'#e04848';
+    scoreBadge = '<span class="badge b-tag" style="font-size:9.5px;padding:1px 5px;background:'+sclr+'1a;color:'+sclr+';border:1px solid '+sclr+'55;">'+sc+'分·'+sr.level+'</span>';
+  }catch(e){}
   return `<div class="sig-card ${cls}" data-code="${it.code}" data-name="${it.name}" style="cursor:pointer;">
     <div class="sig-top">
       <span class="sig-name">${it.name}</span>
       <span class="sig-code">${it.code}</span>
-      <span class="sig-tag ${s.tag}">${it.pool}</span>${res}${hitB}
+      <span class="sig-tag ${s.tag}">${it.pool}</span>${scoreBadge}${res}${hitB}
     </div>
     <div><span class="sig-badge ${badgeCls}">${s.name}</span></div>
     <div class="sig-desc">${desc}</div>
@@ -2485,28 +2607,42 @@ async function fetchBTKline(code, lmt){
 
 async function fetchEmKline(code, lmt){
   var secid = code2secid(code);
-  var url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=' + secid
-    + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58'
-    + '&klt=101&fqt=1&beg=0&end=20500101&lmt=' + lmt + '&_=' + Date.now();
-  var json = await _fetchJSON(url, 3, 500);
-  var klines = json && json.data && json.data.klines;
-  if(!Array.isArray(klines) || !klines.length) throw new Error('K线为空');
-  return klines.map(function(line){
-    var p = line.split(',');
-    return {day:p[0], open:+p[1], close:+p[2], high:+p[3], low:+p[4], volume:+p[5]};
-  }).filter(function(k){ return !isNaN(k.close); });
+  var hosts = ['https://push2his.eastmoney.com','https://push2delay.eastmoney.com'];
+  for(var h=0;h<hosts.length;h++){
+    var url = hosts[h]+'/api/qt/stock/kline/get?secid=' + secid
+      + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58'
+      + '&klt=101&fqt=1&beg=0&end=20500101&lmt=' + lmt + '&_=' + Date.now();
+    try{
+      var json = await _fetchJSON(url, 2, 500);
+      var klines = json && json.data && json.data.klines;
+      if(Array.isArray(klines) && klines.length){
+        return klines.map(function(line){
+          var p = line.split(',');
+          return {day:p[0], open:+p[1], close:+p[2], high:+p[3], low:+p[4], volume:+p[5]};
+        }).filter(function(k){ return !isNaN(k.close) && !isNaN(k.open) && k.close > 0 && k.open > 0; });
+      }
+    }catch(e){ /* try next host */ }
+  }
+  throw new Error('东财K线为空');
 }
 
 // 腾讯兜底源：qfqday 项格式 [date, open, close, high, low, volume(手)]
 async function fetchTencentKline(code, lmt){
-  var url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' + code + ',day,,,' + lmt + ',qfq';
-  var json = await _fetchJSON(url, 2, 400);
-  var node = json && json.data && json.data[code];
-  var rows = node && (node.qfqday || node.day);
-  if(!Array.isArray(rows) || !rows.length) throw new Error('腾讯K线为空');
-  return rows.map(function(p){
-    return {day:p[0], open:+p[1], close:+p[2], high:+p[3], low:+p[4], volume:+p[5]};
-  }).filter(function(k){ return !isNaN(k.close); });
+  var hosts = ['https://web.ifzq.gtimg.cn','https://web.sq.gtimg.cn'];
+  for(var h=0;h<hosts.length;h++){
+    var url = hosts[h]+'/appstock/app/fqkline/get?param=' + code + ',day,,,' + lmt + ',qfq';
+    try{
+      var json = await _fetchJSON(url, 2, 400);
+      var node = json && json.data && json.data[code];
+      var rows = node && (node.qfqday || node.day);
+      if(Array.isArray(rows) && rows.length){
+        return rows.map(function(p){
+          return {day:p[0], open:+p[1], close:+p[2], high:+p[3], low:+p[4], volume:+p[5]};
+        }).filter(function(k){ return !isNaN(k.close) && !isNaN(k.open) && k.close > 0 && k.open > 0; });
+      }
+    }catch(e){ /* try next host */ }
+  }
+  throw new Error('腾讯K线为空');
 }
 
 // 带重试的 JSON 请求（东财公开接口偶发连接重置）
@@ -2579,6 +2715,7 @@ function backtestStock(code, name, holdDays){
       lastFire[fire] = i;
 
       var entry = bars[entryBar].open;
+      if(!entry || isNaN(entry) || entry <= 0) continue;   // 防止 NaN 传播
       var endJ = Math.min(entryBar + holdDays, n-1);
       var exit = closes[endJ], exitJ = endJ, reason = '到期';
       for(var j=entryBar+1; j<=endJ; j++){
@@ -2618,7 +2755,7 @@ function renderBtResults(){
   var trades = BT_STATE.trades;
   var stats = aggregateTrades(trades);
   var n = trades.length, wins = trades.filter(t=>t.ret>0).length;
-  var sum = trades.reduce((a,t)=>a+t.ret,0);
+  var sum = trades.reduce((a,t)=>a+(isNaN(t.ret)?0:t.ret),0);
   var winSum = trades.filter(t=>t.ret>0).reduce((a,t)=>a+t.ret,0);
   var lossSum = trades.filter(t=>t.ret<=0).reduce((a,t)=>a+Math.abs(t.ret),0);
   var avg = n? sum/n : 0, avgW = wins? winSum/wins : 0, avgL = (n-wins)? lossSum/(n-wins) : 0;
