@@ -179,7 +179,7 @@ header{height:56px;display:flex;align-items:center;gap:18px;padding:0 20px;backg
 
 <!-- ===== 顶栏 ===== -->
 <header>
-  <a class='back-btn' href='/trading-dashboard'>← 返回工作台</a>
+  <a class='back-btn' href='trading-dashboard.html'>← 返回工作台</a>
   <div class="stock-id">
     <span class="name" id="h-name">--</span>
     <span class="code" id="h-code">--</span>
@@ -661,44 +661,72 @@ function limitUpPct(){
 // 数据获取
 // ═══════════════════════════════════════════════════════
 async function fetchQuote(){
-  // 优先走东方财富公开接口（支持 CORS，GitHub Pages 可直连）
-  try{
-    var secid = code2secid(code);
-    var resp = await fetch('https://push2.eastmoney.com/api/qt/stock/get?secid='+secid+'&fields=f43,f44,f45,f46,f47,f48,f57,f58,f169,f170&_='+Date.now());
-    var json = await resp.json();
-    var d = json && json.data;
-    if(!d || d.f43 == null) throw new Error('no data');
-    var current = d.f43/100;
-    var change = d.f169/100;
-    var preclose = current - change;
-    var changePct = preclose ? change/preclose*100 : 0;
-    if(isNaN(current) || current===0) current = preclose;
-    return {
-      name: d.f58 || code,
-      open: d.f46/100,
-      preclose: preclose,
-      current: current,
-      high: d.f44/100,
-      low: d.f45/100,
-      bid: current, ask: current,   // 东方财富此组字段未含买卖盘，回退用现价
-      volume: d.f47,
-      amount: d.f48,
-      change: change,
-      changePct: changePct
-    };
-  }catch(e){
-    console.warn('eastmoney quote failed, fallback to proxy', e);
+  // 东财直连（重试2次）→ 腾讯行情兜底（CORS 已实测可用）→ 本地 proxy（开发用）
+  var secid = code2secid(code);
+  for(var i=0;i<2;i++){
     try{
-      var resp2 = await fetch(PROXY+'/quote?code='+code);
-      var buf = await resp2.arrayBuffer();
-      var txt;
-      try{ txt = new TextDecoder('gbk').decode(buf); }
-      catch(e2){ txt = new TextDecoder().decode(buf); }
-      return parseSinaQuote(txt);
-    }catch(e2){
-      console.warn('quote fetch failed', e2);
-      return null;
+      var resp = await fetch('https://push2.eastmoney.com/api/qt/stock/get?secid='+secid+'&fields=f43,f44,f45,f46,f47,f48,f57,f58,f169,f170&_='+Date.now());
+      var json = await resp.json();
+      var d = json && json.data;
+      if(!d || d.f43 == null) throw new Error('no data');
+      var current = d.f43/100;
+      var change = d.f169/100;
+      var preclose = current - change;
+      var changePct = preclose ? change/preclose*100 : 0;
+      if(isNaN(current) || current===0) current = preclose;
+      return {
+        name: d.f58 || code,
+        open: d.f46/100,
+        preclose: preclose,
+        current: current,
+        high: d.f44/100,
+        low: d.f45/100,
+        bid: current, ask: current,   // 东方财富此组字段未含买卖盘，回退用现价
+        volume: d.f47,
+        amount: d.f48,
+        change: change,
+        changePct: changePct
+      };
+    }catch(e){
+      if(i===1) console.warn('eastmoney quote failed after retry', e);
     }
+  }
+  try{
+    // 腾讯实时行情兜底（GBK 文本，~分隔：3现价 4昨收 5今开 6成交量(手) 33最高 34最低 32涨跌% 37成交额(万)）
+    var respT = await fetch('https://qt.gtimg.cn/q='+code+'&_='+Date.now());
+    var buf = await respT.arrayBuffer();
+    var txtT = new TextDecoder('gbk').decode(buf);
+    var mT = txtT.match(/v_\w+="([^"]*)"/);
+    if(!mT) throw new Error('bad tencent quote format');
+    var p = mT[1].split('~');
+    var cur = parseFloat(p[3]), pre = parseFloat(p[4]);
+    if(!cur || !pre) throw new Error('bad tencent quote value');
+    return {
+      name: p[1] || code,
+      open: parseFloat(p[5]),
+      preclose: pre,
+      current: cur,
+      high: parseFloat(p[33]),
+      low: parseFloat(p[34]),
+      bid: cur, ask: cur,
+      volume: parseFloat(p[6])*100,
+      amount: parseFloat(p[37])*10000,
+      change: cur - pre,
+      changePct: parseFloat(p[32])
+    };
+  }catch(e2){
+    console.warn('tencent quote failed', e2);
+  }
+  try{
+    var resp2 = await fetch(PROXY+'/quote?code='+code);
+    var buf2 = await resp2.arrayBuffer();
+    var txt;
+    try{ txt = new TextDecoder('gbk').decode(buf2); }
+    catch(e3){ txt = new TextDecoder().decode(buf2); }
+    return parseSinaQuote(txt);
+  }catch(e4){
+    console.warn('quote fetch failed', e4);
+    return null;
   }
 }
 
@@ -725,53 +753,76 @@ function parseSinaQuote(txt){
 }
 
 async function fetchKline(){
-  // 优先走东方财富公开接口（支持 CORS，GitHub Pages 可直连）
+  // 东财直连（重试2次）→ 腾讯 qfq 日K 兜底（CORS 已实测可用）→ 本地 proxy（开发用）
+  var secid = code2secid(code);
+  for(var i=0;i<2;i++){
+    try{
+      var url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid='+secid
+        + '&fields1=f1,f2,f3,f4,f5,f6'
+        + '&fields2=f51,f52,f53,f54,f55,f56,f57,f58'
+        + '&klt=101&fqt=0&beg=0&end=20500101&lmt=260&_='+Date.now();
+      var resp = await fetch(url);
+      var json = await resp.json();
+      var klines = json && json.data && json.data.klines;
+      if(!Array.isArray(klines) || !klines.length) throw new Error('empty kline data');
+      // klines 项格式: date,open,close,high,low,volume,amount,amplitude
+      return klines.map(function(line){
+        var p = line.split(',');
+        return {
+          day: p[0],
+          open: parseFloat(p[1]),
+          close: parseFloat(p[2]),
+          high: parseFloat(p[3]),
+          low: parseFloat(p[4]),
+          volume: parseFloat(p[5])
+        };
+      }).filter(k=>!isNaN(k.close));
+    }catch(e){
+      if(i===1) console.warn('eastmoney kline failed after retry', e);
+    }
+  }
   try{
-    var secid = code2secid(code);
-    var url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid='+secid
-      + '&fields1=f1,f2,f3,f4,f5,f6'
-      + '&fields2=f51,f52,f53,f54,f55,f56,f57,f58'
-      + '&klt=101&fqt=0&beg=0&end=20500101&lmt=260&_='+Date.now();
-    var resp = await fetch(url);
-    var json = await resp.json();
-    var klines = json && json.data && json.data.klines;
-    if(!Array.isArray(klines) || !klines.length) throw new Error('empty kline data');
-    // klines 项格式: date,open,close,high,low,volume,amount,amplitude
-    return klines.map(function(line){
-      var p = line.split(',');
+    // 腾讯日K兜底：qfqday 项格式 [date,open,close,high,low,volume,...]
+    var urlT = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param='+code+',day,,,320,qfq&_='+Date.now();
+    var respT = await fetch(urlT);
+    var jsonT = await respT.json();
+    var dT = jsonT && jsonT.data && jsonT.data[code];
+    var arrT = dT && (dT.qfqday || dT.day);
+    if(!Array.isArray(arrT) || !arrT.length) throw new Error('empty tencent kline');
+    return arrT.map(function(a){
       return {
-        day: p[0],
-        open: parseFloat(p[1]),
-        close: parseFloat(p[2]),
-        high: parseFloat(p[3]),
-        low: parseFloat(p[4]),
-        volume: parseFloat(p[5])
+        day: a[0],
+        open: parseFloat(a[1]),
+        close: parseFloat(a[2]),
+        high: parseFloat(a[3]),
+        low: parseFloat(a[4]),
+        volume: parseFloat(a[5])
       };
     }).filter(k=>!isNaN(k.close));
-  }catch(e){
-    console.warn('eastmoney kline failed, fallback to proxy', e);
-    try{
-      var resp2 = await fetch(PROXY+'/kline?code='+code+'&datalen=260');
-      var txt = await resp2.text();
-      // 尝试直接JSON解析
-      var arr;
-      try { arr = JSON.parse(txt); }
-      catch(e1){
-        // 尝试剥JSONP wrapper: x([...]) -> [...]
-        var m = txt.match(/\(\s*(\[.*\])\s*\)/s);
-        if(m){ arr = JSON.parse(m[1]); }
-        else { throw e1; }
-      }
-      if(!Array.isArray(arr) || !arr.length) throw new Error('empty kline data');
-      return arr.map(k=>({
-        day:k.day, open:parseFloat(k.open), high:parseFloat(k.high),
-        low:parseFloat(k.low), close:parseFloat(k.close), volume:parseFloat(k.volume)
-      })).filter(k=>!isNaN(k.close));
-    }catch(e2){
-      console.error('kline fetch failed', e2);
-      showDataError('K线数据加载失败: ' + (e2.message||e2));
-      return [];
+  }catch(e2){
+    console.warn('tencent kline failed', e2);
+  }
+  try{
+    var resp2 = await fetch(PROXY+'/kline?code='+code+'&datalen=260');
+    var txt = await resp2.text();
+    // 尝试直接JSON解析
+    var arr;
+    try { arr = JSON.parse(txt); }
+    catch(e1){
+      // 尝试剥JSONP wrapper: x([...]) -> [...]
+      var m = txt.match(/\(\s*(\[.*\])\s*\)/s);
+      if(m){ arr = JSON.parse(m[1]); }
+      else { throw e1; }
     }
+    if(!Array.isArray(arr) || !arr.length) throw new Error('empty kline data');
+    return arr.map(k=>({
+      day:k.day, open:parseFloat(k.open), high:parseFloat(k.high),
+      low:parseFloat(k.low), close:parseFloat(k.close), volume:parseFloat(k.volume)
+    })).filter(k=>!isNaN(k.close));
+  }catch(e3){
+    console.error('kline fetch failed', e3);
+    showDataError('K线数据加载失败: ' + (e3.message||e3));
+    return [];
   }
 }
 
