@@ -1890,9 +1890,8 @@ function _norm6(num6){
   return num6[0]==='6' ? 'sh'+num6 : 'sz'+num6;
 }
 
-// 存档今日（通过 P0 的）推荐
-async function snapshotTodayRecommends(manual){
-  // 关键：存档必须等东财实时数据就绪，否则会用"数据未加载"的 P0 状态误存被否决的标的
+// 确保东财实时 P0 数据就绪（最多等 90s）；所有依赖 checkP0 的视图/存档都必须先调用
+async function ensureP0Live(){
   var hasLive = Object.keys(LIVE_FUND||{}).length > 0;
   if(!hasLive && !_p0Loading){
     _p0AutoTried = false;
@@ -1900,6 +1899,12 @@ async function snapshotTodayRecommends(manual){
   }
   var waited = 0;
   while(_p0Loading && waited < 90000){ await new Promise(function(r){ setTimeout(r, 500); }); waited += 500; }
+}
+
+// 存档今日（通过 P0 的）推荐
+async function snapshotTodayRecommends(manual){
+  // 关键：存档必须等东财实时数据就绪，否则会用"数据未加载"的 P0 状态误存被否决的标的
+  await ensureP0Live();
 
   var dayKey = ymd();
   var archive = trLoad();
@@ -2128,6 +2133,10 @@ async function renderPortfolioView(){
   var posEl = document.getElementById('pfPosition');
   var corrMeta = document.getElementById('pfCorrMeta');
   try{
+    // P0 过滤必须等东财实时数据就绪，否则会误放行被解禁/财报否决的标的
+    posEl.textContent = '⏳ 等待东财实时数据就绪…';
+    await ensureP0Live();
+
     // ---- ① 总仓位 ----
     var regime = await getMarketRegime();
     var cap = pfPositionCap(regime);
