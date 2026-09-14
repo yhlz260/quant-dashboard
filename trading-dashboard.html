@@ -1201,8 +1201,18 @@ async function fetchQuotesBatch(secids){
 // 全池行情刷新：批量1次请求（含指数），失败的标的逐只回退
 async function refreshAllQuotes(){
   const allStocks = [...STOCKS.mid, ...STOCKS.swing, ...STOCKS.short];
-  const secids = INDICES.map(i => code2secid(i.code)).concat(allStocks.map(s => code2secid(s.code)));
-  const batch = await fetchQuotesBatch(secids);
+  // 豆包池子全量股票（100+只），用 allPoolStocks() 合并去重
+  const poolStocks = (typeof allPoolStocks === 'function') ? allPoolStocks() : [];
+  // 合并所有 secid 去重
+  const allCodes = new Set();
+  INDICES.forEach(i => allCodes.add(i.code));
+  allStocks.forEach(s => allCodes.add(s.code));
+  poolStocks.forEach(s => { if(s && s.code) allCodes.add(s.code.length === 6 ? (s.code[0] === '6' ? 'sh' : 'sz') + s.code : s.code) });
+  const secids = [...allCodes].map(c => code2secid(c));
+  // 分批拉取（ulist 每次最多 ~100 只，分 2 批避免 URL 过长）
+  const batch1 = await fetchQuotesBatch(secids.slice(0, 100));
+  const batch2 = secids.length > 100 ? await fetchQuotesBatch(secids.slice(100)) : null;
+  const batch = Object.assign({}, batch1, batch2);
   for(const idx of INDICES){
     const q = batch && batch[idx.code];
     if(q) window['_q_'+idx.id] = q;
@@ -1217,6 +1227,19 @@ async function refreshAllQuotes(){
     else {
       const one = await fetchQuote(s.code);
       if(one) s._q = one;
+    }
+  }
+  // 更新豆包池子股票的 now/chg/vr（scanSignals 和 tailSignalRows 用）
+  for(const s of poolStocks){
+    if(!s || !s.code) continue;
+    const fullCode = s.code.length === 6 ? (s.code[0] === '6' ? 'sh' : 'sz') + s.code : s.code;
+    const q = batch && batch[fullCode];
+    if(q){
+      s.now = parseFloat(q.val);
+      s.chg = parseFloat(q.chg);
+      if(q.vr) s.vr = parseFloat(q.vr);
+      // 写入实时缓存供 tailSignalRows 的 rtOf() 读取
+      window['v_' + s.code] = q.val + ',' + q.chg + ',' + (q.vr || '0') + ',' + (q.turnover || '');
     }
   }
   return batch;
@@ -1263,8 +1286,12 @@ function swingProgress(stock, quote){
 
 // ================= 渲染 =================
 async function render(){
-  // 0. 批量拉全池行情（1次请求，指数+23标的；5s 轮询无压力）
+  // 0. 批量拉全池行情（1次请求，指数+23标的+豆包池100+只；5s 轮询）
   await refreshAllQuotes();
+  // 更新 RT_STATE 时间戳（viewSignals 引用）
+  var _now = new Date();
+  RT_STATE.on = true;
+  RT_STATE.last = String(_now.getHours()).padStart(2,'0')+':'+String(_now.getMinutes()).padStart(2,'0')+':'+String(_now.getSeconds()).padStart(2,'0');
 
   // 0.5 P0-3：大盘 regime（直接复用已刷新的指数缓存；无缓存才走旧兜底链）
   try{
@@ -1320,7 +1347,13 @@ async function render(){
     </div>`;
   }).join('') || '<div style="color:var(--text3);font-size:13px;padding:10px 0;">当前无明显开仓信号，耐心等待</div>';
 
-  // 4. 信号捕捉三色网格
+  // 4. 信号捕捉：全池扫描（豆包 scanSignals 100+ 只）
+  const sigView = document.getElementById('view-signals');
+  if(sigView && sigView.classList.contains('active')){
+    sigView.innerHTML = '<div class="view-title">⚡ 信号捕捉</div><div class="view-sub">10 池全量扫描 · 100+ 只 · 实时买入/卖出信号 · 14:30-14:55 尾盘窗口自动加强</div>' + viewSignals();
+  }
+
+  // 5. 三重仓三色网格（总览页用旧逻辑，仅 23 只核心池）
   const sigBuckets = {red:[], green:[], yellow:[]};
   for(const x of quickSignals){
     if(sigBuckets[x.sig.type]) sigBuckets[x.sig.type].push(x);
@@ -1543,6 +1576,10 @@ document.querySelectorAll('.nav-item').forEach(el => {
     if(view === 'tracker'){ initTrackerUI(); renderTrackerView(); }
     if(view === 'portfolio'){ initPortfolioUI(); renderPortfolioView(); }
     if(view === 'marketradar') renderMarketRadar();
+    if(view === 'signals'){
+      var sv = document.getElementById('view-signals');
+      if(sv) sv.innerHTML = '<div class="view-title">⚡ 信号捕捉</div><div class="view-sub">10 池全量扫描 · 100+ 只 · 实时买入/卖出信号 · 14:30-14:55 尾盘窗口自动加强</div>' + viewSignals();
+    }
   });
 });
 // 全市场雷达：仅当该视图激活时每15秒刷新（榜单独立于5秒行情主循环）
@@ -1598,6 +1635,665 @@ async function renderMarketRadar(){
   const meta = document.getElementById('mrMeta');
   if(meta) meta.textContent = '全市场 5000+ 只实时扫描 · 更新于 ' + new Date().toLocaleTimeString('zh-CN',{hour12:false});
 }
+
+// ================= 豆包池子+信号扫描器（全量移植） =================
+// 兼容层：补齐豆包代码依赖的全局变量和辅助函数
+var RT_STATE = { on:false, last:'--:--:--', err:'' };
+var state = { positions: [] }; // 持仓状态（豆包代码引用 state.positions）
+function rtCode(code){
+  code = String(code).replace(/\D/g,'');
+  if(code.length<6) return '';
+  var pre = (code.charAt(0)==='6'||code.charAt(0)==='9')?'sh':'sz';
+  return pre+code;
+}
+function rtParseStr(str){
+  if(!str) return null;
+  // 兼容两种格式：sina "名称,代码,现价..." 和东财 "1~名称~代码~现价~..."
+  if(str.indexOf('~')>=0){
+    var f = str.split('~');
+    if(f.length<5) return null;
+    return { code: f[2], now: parseFloat(f[3]), prev: parseFloat(f[4])||parseFloat(f[3]), amount: parseFloat(f[37])||0, turnover: parseFloat(f[38])||0, vr: parseFloat(f[49])||0, high: parseFloat(f[33])||0, low: parseFloat(f[34])||0 };
+  }
+  // 简单逗号格式：现价,涨跌幅,量比,成交额
+  var parts = str.split(',');
+  if(parts.length < 2) return null;
+  var now = parseFloat(parts[0]);
+  if(isNaN(now)) return null;
+  return { code: '', now: now, prev: now/(1+parseFloat(parts[1])/100), vr: parseFloat(parts[2])||0, turnover: parseFloat(parts[3])||0 };
+}
+function scanEscape(){
+  var out=[];
+  var seen={};
+  function add(p,pool){
+    if(!p||!p.code) return;
+    escapeSignals(p).forEach(function(s){
+      if(s.cls==='escape' && !seen[p.code+'|'+s.k]){
+        seen[p.code+'|'+s.k]=1;
+        out.push({code:p.code,name:p.name||p.code,pool:pool||'候选',sig:s,nowTxt:(typeof num==='function'&&num(p.now)!=null)?p.now.toFixed(2):''});
+      }
+    });
+  }
+  var pools=[typeof FAREAST_POOL!=='undefined'?FAREAST_POOL:null, typeof SWING_POOL!=='undefined'?SWING_POOL:null,
+    typeof SHORT_POOL!=='undefined'?SHORT_POOL:null, typeof NZI_POOL!=='undefined'?NZI_POOL:null,
+    typeof CCI_POOL!=='undefined'?CCI_POOL:null, typeof ADX_POOL!=='undefined'?ADX_POOL:null,
+    typeof DIVIDEND_POOL!=='undefined'?DIVIDEND_POOL:null, typeof SMALLCAP_POOL!=='undefined'?SMALLCAP_POOL:null,
+    typeof FAKEYIN_POOL!=='undefined'?FAKEYIN_POOL:null, typeof ONELINE_POOL!=='undefined'?ONELINE_POOL:null];
+  pools.forEach(function(pl){ (pl||[]).forEach(function(c){ add(c, c.pool||'候选'); }); });
+  return out;
+}
+
+function fmtChg(v){ return (v>=0?'+':'')+v.toFixed(2)+'%'; }
+// ind 安全渲染：缺字段/字符串/NaN 一律显示 '—'，避免 undefined
+function num(v){ return (typeof v==='number' && !isNaN(v)) ? v : null; }
+function fnum(v,d){ const n=num(v); return n!=null?n.toFixed(d):'—'; }
+function indVal(p,k,d){ const n=num(p.ind&&p.ind[k]); return n!=null?n.toFixed(d):'—'; }
+function indCls(p,k,hi,lo){ const n=num(p.ind&&p.ind[k]); if(n==null) return 'flat'; return n>=hi?'up':(lo!=null&&n<=lo?'down':'flat'); }
+
+function escapeSignals(p){
+  var out=[];
+  if(!p||!p.code) return out;
+  var I=p.ind||p.indicators||{};
+  var chg=parseFloat(p.chg)||0, vr=parseFloat(I.vr)||0;
+  var pos60 = num(I.pos60)!=null ? I.pos60 : (num(p.p60)!=null?p.p60:null);
+  var pos30 = num(I.pos30)!=null ? I.pos30 : null;
+  var posHi = (pos30!=null&&pos60!=null)?Math.max(pos30,pos60):(pos60!=null?pos60:pos30);
+  var cci = num(I.cci)!=null ? I.cci : (num(p.cci)!=null?p.cci:null);
+  // 20日涨幅（S7 用：区分'涨上来的高位'与'横盘箱体上沿'，2026-09-08 修正）
+  function chg20Of(pp){
+    var I2=pp.ind||pp.indicators||{};
+    var v=num(I2.chg20); if(v!=null) return v;
+    v=num(pp.chg20); if(v!=null) return v;
+    try{
+      if(typeof kCacheGet==='function'){
+        var bs=kCacheGet(pp.code);
+        if(bs&&bs.length>=21&&bs[bs.length-21][2]>0) return (bs[bs.length-1][2]/bs[bs.length-21][2]-1)*100;
+      }
+    }catch(e){}
+    return null;
+  }
+  var c20 = chg20Of(p);
+  // S7 高位放量滞涨（2026-09-08 收紧）：max(30/60日位置)>=75 + 量比>=3(显著放量) + 涨幅<0.5%(真滞涨) + 20日涨幅>=10%(排除横盘蓝筹/深坑低位假高位)
+  if(posHi!=null && posHi>=75 && vr>=3 && chg<0.5 && c20!=null && c20>=10)
+    out.push({k:'S7',name:'高位放量滞涨',cls:'escape',kind:'top',desc:'30/60日位置'+posHi.toFixed(0)+'% · 量比'+vr.toFixed(2)+' · 涨幅'+fmtChg(chg)+' · 20日+'+c20.toFixed(0)+'%，高位滞涨'});
+  // S26 子午峰值下拐：高位(60日位置>=70) + CCI>150 且当日回落/走平
+  // 2026-09-08 修正：中低位 CCI 脉冲不算顶（误报案例：汽轮科技300277 60日位置38%、90日跌28.6%，
+  // 深调后单日放量反弹拉爆CCI163；位置是逃顶第一前提，CCI单独不构成逃顶依据）
+  if(cci!=null && cci>150 && chg<=0 && pos60!=null && pos60>=70)
+    out.push({k:'S26',name:'子午峰值下拐',cls:'escape',kind:'top',desc:'CCI '+cci.toFixed(0)+' 高位回落'+(chg<0?(' '+fmtChg(chg)):'')+' · 60日位置'+pos60.toFixed(0)+'%'});
+  // S2 趋势破坏：均线空头/破位（pos 字段已有下降/破止损标记）
+  // 2026-09-10 修正：加位置约束 posHi>=50 —— 低位超跌空头≠逃顶（误报案例=山东高速600350 60日位置3.4%）
+  if(posHi!=null && posHi>=50 && (String(p.pos||'').indexOf('下降')>=0||String(p.pos||'').indexOf('破')>=0))
+    out.push({k:'S2',name:'趋势破坏',cls:'escape',kind:'trend',desc:'高位('+posHi.toFixed(0)+'%) 均线转空/破位：'+String(p.pos||'').slice(0,14)});
+  // S6 缩量锁筹：上涨+量比<1+位置不高 -> 健康持有
+  if(chg>1 && vr>0 && vr<1 && (pos60==null||pos60<70))
+    out.push({k:'S6',name:'缩量锁筹',cls:'hold',kind:'hold',desc:'量比'+vr.toFixed(2)+' 缩量上涨，主力锁筹·继续持有'});
+    // S33 主力阶段鉴别（药无敌四步法：①下杀洗盘②套牢消耗③区间吸筹④放量拉升；高位=派发风险）
+  var c3 = (typeof CYCLE3!=='undefined') ? CYCLE3[p.code] : null;
+  if(c3){
+    if(c3.st && (String(c3.st).indexOf('派发')>=0 || c3.w==='派发·滞涨' || c3.w==='派发·回落'))
+      out.push({k:'S33',name:'主力派发',cls:'escape',kind:'top',desc:'主力阶段'+c3.st+'·周线'+c3.w+'，高位派发风险，逃顶加权'});
+    else if(c3.st && (String(c3.st).indexOf('吸筹')>=0 || String(c3.st).indexOf('下杀')>=0 || String(c3.st).indexOf('消耗')>=0))
+      out.push({k:'S33b',name:'主力吸筹/洗盘',cls:'hold',kind:'wash',desc:'主力阶段'+c3.st+'·周线'+c3.w+'，回调多为洗盘性质（非逃顶）'});
+  }
+    // @蚂蚁体系（2026-09-10 S39，信号库八类）：高位+放量回落=拐头迹象，不要吃最后一口
+  if(posHi!=null && posHi>=75 && chg<=-1 && vr>=1.5)
+    out.push({k:'M39',name:'拐头回落·不贪最后一口',cls:'escape',kind:'top',desc:'60日位置'+posHi.toFixed(0)+'% 高位拐头'+fmtChg(chg)+' · 量比'+vr.toFixed(2)+' · 蚂蚁S39：不要吃最后一口'});
+  return out;
+}
+
+// ===== 信号捕捉：盘中实时扫描三重仓开仓信号（14:30-14:55尾盘窗口重点）=====
+function parseBuyRange(buy){
+  // buy 可能是 '12.2-12.5' 区间 或 12.2 数值
+  if(typeof buy==='number') return {lo:buy, hi:buy};
+  var s=String(buy||'').replace(/[^\d.\-~至→]/g,'');
+  var m=s.match(/(\d+\.?\d*)\s*[-~至→]\s*(\d+\.?\d*)/);
+  if(m) return {lo:parseFloat(m[1]), hi:parseFloat(m[2])};
+  var n=parseFloat(s);
+  return isNaN(n)?null:{lo:n,hi:n};
+}
+function sigPoolTag(pool){
+  if(pool.indexOf('埋伏')>=0||pool.indexOf('中长')>=0) return 'mid';
+  if(pool.indexOf('波段')>=0) return 'sw';
+  return 'sh';
+}
+// 信号类型判定（全部客观规则，不做买卖建议）
+function sigOfStock(c, poolName){
+  var sigs=[];
+  if(!c||!c.code) return sigs;
+  var now=parseFloat(c.now);
+  if(isNaN(now)) return sigs;
+  var br=parseBuyRange(c.buy);
+  var cci=(c.ind&&c.ind.cci)||c.cci;
+  var vr=parseFloat(c.vr)||0;
+  var chg=parseFloat(c.chg)||0;
+  var pos=c.pos||'';
+  var tag=sigPoolTag(poolName);
+  var priceTxt=now.toFixed(2);
+  // @蚂蚁体系（2026-09-10 S37/S38，信号库八类）：Vegas趋势边界 + 顺势第N天执行
+  var vg=c.vg||null;
+  var isMidPool = poolName.indexOf('埋伏')>=0||poolName.indexOf('中长')>=0||poolName.indexOf('波段')>=0;
+  if(vg && isMidPool){
+    if(vg.st==='cross'){
+      sigs.push({type:'weak', tag:tag, name:'Vegas拐头·蚂蚁S37', desc:'MA20('+vg.ma20.toFixed(2)+') 上穿EMA144('+vg.e144.toFixed(2)+') · 行情拐头确认，配合入场信号使用', key:'near'});
+    } else if(vg.st==='bear' && c.ma20 && now>c.ma20*1.02){
+      sigs.push({type:'weak', tag:tag, name:'Vegas空头反弹·不追·蚂蚁S37', desc:'现价 '+priceTxt+' 站上MA20但<EMA144('+vg.e144.toFixed(2)+') · Vegas未拐头，反弹不追', key:'near'});
+    }
+    if(vg.upDays>=6){
+      sigs.push({type:'weak', tag:tag, name:'顺势第'+vg.upDays+'天·蚂蚁S38', desc:'连涨'+vg.upDays+'天趋势延续 · 第5-6天同形态复现按同一规则重复执行，不恐高', key:'low'});
+    }
+  }
+
+  // 2026-09-10 防追高（对齐workbuddy对比修正）：现价已高于买点区间上沿>8% → 标"等回踩"，不显示买点窗口
+  if(br && now>br.hi*1.08){
+    sigs.push({type:'weak', tag:tag, name:'已偏离买点·等回踩', desc:'现价 '+priceTxt+' 已高于买点区间上沿'+((now/br.hi-1)*100).toFixed(0)+'% · 不追高，等回踩 '+fmtRange(c.buy), key:'near'});
+  }
+  if(poolName.indexOf('埋伏')>=0||poolName.indexOf('中长')>=0){
+    // 埋伏池：现价回踩至买入区间内/上沿附近 = 低吸信号；MACD金叉+放量 = 启动信号
+    if(br && now<=br.hi*1.015 && now>=br.lo*0.97){
+      sigs.push({type:'strong', tag:tag, name:'回踩买点区', desc:'现价 '+priceTxt+' 已进入买点区间 '+fmtRange(c.buy)+'，埋伏低吸窗口', key:'buy'});
+    } else if(c.ind&&c.ind.macd>0 && vr>=1.5 && pos.indexOf('启动')>=0){
+      sigs.push({type:'strong', tag:tag, name:'右侧启动', desc:'MACD金叉+放量'+vr.toFixed(2)+'倍+趋势启动确认', key:'launch'});
+    } else if(c.ind&&c.ind.macd>0 && br && now<br.lo){
+      sigs.push({type:'weak', tag:tag, name:'临近买点', desc:'MACD已转正，现价 '+priceTxt+' 距买点 '+fmtRange(c.buy)+' 一步之遥', key:'near'});
+    }
+    // @蚂蚁体系（2026-09-10 S33/S36，信号库八类）：回踩均线暂停+好K=进；首次站上不追等二次回测
+    if(c.ma20 && Math.abs(now/c.ma20-1)<=0.025 && c.ind&&c.ind.macd>0){
+      sigs.push({type:'strong', tag:tag, name:'回踩好K·蚂蚁S33', desc:'现价 '+priceTxt+' 回踩MA20('+c.ma20.toFixed(2)+')暂停 · MACD多头 · 好K=收盘实体≥70%止损不大', key:'buy'});
+    } else if(c.ma20 && now>c.ma20*1.03 && c.p60!=null && c.p60>=40 && c.p60<=65){
+      sigs.push({type:'weak', tag:tag, name:'首次突破·等回测·蚂蚁S36', desc:'现价 '+priceTxt+' 刚站上MA20 +3% · 60日位置'+c.p60.toFixed(0)+'% · 首次突破不追，等二次回测', key:'near'});
+    }
+  } else if(poolName.indexOf('波段')>=0){
+    // 波段池：触达低吸位 = 到买点；但必须是上升/企稳趋势（非下降），且有动量确认
+    var trendOk = !String(c.trend||'').indexOf('下降')>=0;
+    var macdOk = !!(c.ind&&c.ind.macd>0);
+    var oversold = c.p60!=null && c.p60<30;
+    if(br && now<=br.hi*1.01 && now>=br.lo*0.97 && trendOk && (macdOk||oversold) && c.p60!=null && c.p60<40){
+      sigs.push({type:'strong', flash:false, tag:tag, name:'触达低吸位', desc:'现价 '+priceTxt+' 到低吸位 '+fmtRange(c.buy)+' · 60日位置'+(c.p60!=null?c.p60.toFixed(0)+'%':'—')+(macdOk?' · MACD多头':' · 超跌区'), key:'buy'});
+    } else if(br && now<=br.hi*1.02 && now>=br.lo*0.95){
+      sigs.push({type:'weak', tag:tag, name:'低吸位·待回踩', desc:'低吸位 '+fmtRange(c.buy)+' · 现价 '+priceTxt+' 距低吸位'+(c.buy!=null&&typeof c.buy==='number'?(Math.round((now/c.buy-1)*100)+'%'):'较远')+'，等回踩到位', key:'near'});
+    } else if(br && now<=br.hi*1.01 && now>=br.lo*0.97){
+      sigs.push({type:'weak', tag:tag, name:'低吸位·待确认', desc:'现价 '+priceTxt+' 贴近低吸位 '+fmtRange(c.buy)+'，但'+(String(c.trend||'').indexOf('下降')>=0?'趋势下行':'动量未确认')+'，观望', key:'near'});
+    } else if(c.p60!=null && c.p60<35 && pos.indexOf('低吸')>=0 && chg>0){
+      sigs.push({type:'weak', tag:tag, name:'低位企稳', desc:'60日位置 '+c.p60.toFixed(0)+'% 低位，今日'+fmtChg(chg)+'企稳', key:'low'});
+    }
+    // @蚂蚁体系（2026-09-10 S35/S34，信号库八类）：打穿后二次回测+N字=进；巨K先扫不追
+    if(c.ma20 && now>=c.ma20 && c.p60!=null && c.p60<50 && c.ind&&c.ind.macd>0){
+      sigs.push({type:'strong', tag:tag, name:'二次回测确认·蚂蚁S35', desc:'打穿MA20后再次回测站上 '+priceTxt+' · 60日位置'+c.p60.toFixed(0)+'% · N字=高低点抬升', key:'buy'});
+    } else if(br && vr>=2 && now<=br.hi*1.02){
+      sigs.push({type:'weak', tag:tag, name:'巨K先扫·不追·蚂蚁S34', desc:'回踩区巨K 量比'+vr.toFixed(2)+' · 大概率先扫一次 · 差的K线只赚一根，不追', key:'near'});
+    }
+  } else {
+    // 短线池：放量突破/主升加速
+    if(vr>=2 && chg>=3){
+      sigs.push({type:'strong', tag:tag, name:'放量突破', desc:'量比'+vr.toFixed(2)+' 涨幅'+fmtChg(chg)+' 突破启动', key:'break'});
+    } else if(cci!=null && cci>=100 && vr>=1 && chg>0){ // 修复A：CCI主升=加速上涨段，当日回落的超买票不属主升（与逃顶S26互斥）
+      sigs.push({type:'strong', tag:tag, name:'CCI主升', desc:'CCI '+cci.toFixed(0)+' 站稳100'+' · 量比'+vr.toFixed(2), key:'cci'});
+    } else if(br && now<=br.hi*1.015 && now>=br.lo*0.97){
+      sigs.push({type:'weak', tag:tag, name:'回踩到位', desc:'现价 '+priceTxt+' 回踩至 '+fmtRange(c.buy)+' 区间', key:'pullback'});
+    }
+  }
+    // @蚂蚁体系（2026-09-10 S36，信号库八类）：量价未共振=首次突破不追，等二次回测
+    if(c.ma20 && now>c.ma20 && (vr<2 || chg<3)){
+      sigs.push({type:'weak', tag:tag, name:'突破未确认·等回测·蚂蚁S36', desc:'站上MA20但量价未共振(量比'+vr.toFixed(2)+' · '+fmtChg(chg)+') · 首次突破不追，等二次回测', key:'near'});
+    }
+  return sigs;
+}
+function fmtRange(buy){
+  if(typeof buy==='number') return buy.toFixed(2);
+  var s=String(buy||'').trim();
+  return s.indexOf('-')>=0||s.indexOf('~')>=0?s:s.replace(/(\d+\.?\d*)([^0-9.]|$)/g,'$1');
+}
+// 全池扫描：三重仓 + 各战法池
+function scanSignals(){
+  var out={strong:[], weak:[]};
+  var pools=[
+    {list:typeof FAREAST_POOL!=='undefined'?FAREAST_POOL:[], name:'埋伏池'},
+    {list:typeof SWING_POOL!=='undefined'?SWING_POOL:[], name:'波段池'},
+    {list:typeof SHORT_POOL!=='undefined'?SHORT_POOL:[], name:'短线池'},
+    {list:(typeof TIERS!=='undefined'&&TIERS.mid)?TIERS.mid:[], name:'中长线池'},
+    {list:(typeof TIERS!=='undefined'&&TIERS.swing)?TIERS.swing:[], name:'波段池'},
+    {list:(typeof TIERS!=='undefined'&&TIERS.short)?TIERS.short:[], name:'短线池'},
+  ];
+  var seen={}, seenStrong={}, hitCnt={};
+  var PRIO={buy:0,launch:1,break:2,cci:3,low:4,near:5};
+  pools.forEach(function(p){
+    (p.list||[]).forEach(function(c){
+      if(!c||!c.code) return;
+      sigOfStock(c,p.name).forEach(function(s){
+        var item={code:c.code,name:c.name||c.code,pool:p.name,sig:s,nowTxt:(typeof c.now==='number')?c.now.toFixed(2):''};
+        var k=c.code+s.key;
+        if(seen[k]) return; seen[k]=1;
+        hitCnt[c.code]=(hitCnt[c.code]||0)+1;
+        if(s.type==='strong'){
+          // 同一票只保留一个强信号（优先级最高）
+          if(seenStrong[c.code]!=null){
+            var oldItem=seenStrong[c.code];
+            if((PRIO[s.key]||9) >= (PRIO[oldItem.sig.key]||9)) return;
+            out.strong=out.strong.filter(function(x){return x.code!==c.code;});
+          }
+          seenStrong[c.code]=item;
+          out.strong.push(item);
+        } else {
+          out.weak.push(item);
+        }
+      });
+    });
+  });
+  // 逃顶压制（2026-09-08 修复B：信号库铁律"逃顶S7/S24/S26/S2 优先于一切买入"，命中即移出开仓池）
+  var esc={};
+  function _escCollect(p){
+    if(!p||!p.code) return;
+    escapeSignals(p).forEach(function(s){
+      if(s.cls==='escape' && !esc[p.code]) esc[p.code]=s;
+    });
+  }
+  (state.positions||[]).forEach(function(p){_escCollect(p);});
+  var escPools=[typeof FAREAST_POOL!=='undefined'?FAREAST_POOL:null, typeof SWING_POOL!=='undefined'?SWING_POOL:null,
+    typeof SHORT_POOL!=='undefined'?SHORT_POOL:null, (typeof TIERS!=='undefined'&&TIERS.mid)?TIERS.mid:null,
+    (typeof TIERS!=='undefined'&&TIERS.swing)?TIERS.swing:null, (typeof TIERS!=='undefined'&&TIERS.short)?TIERS.short:null,
+    typeof NZI_POOL!=='undefined'?NZI_POOL:null, typeof CCI_POOL!=='undefined'?CCI_POOL:null, typeof ADX_POOL!=='undefined'?ADX_POOL:null];
+  escPools.forEach(function(pl){(pl||[]).forEach(function(c){_escCollect(c);});});
+  out.escapeBlocked=[];
+  out.strong=out.strong.filter(function(it){
+    if(esc[it.code]){ out.escapeBlocked.push({code:it.code,name:it.name,sig:esc[it.code]}); return false; }
+    return true;
+  });
+  // 多池共振标记
+  var cnt={};
+  out.strong.forEach(function(it){ cnt[it.code]=(cnt[it.code]||0)+1; });
+  out.strong.forEach(function(it){ if(cnt[it.code]>=2) it.resonance=true; });
+  // 2026-09-10 信号共振计数（workbuddy x/N 模式）：命中信号总条数(强+弱)
+  out.strong.forEach(function(it){ it.hitN=hitCnt[it.code]||0; });
+  out.weak.forEach(function(it){ it.hitN=hitCnt[it.code]||0; });
+  return out;
+}
+function sigCard(it){
+  var s=it.sig;
+  var cls = s.type==='weak' ? 'yellow' : (s.flash===false ? 'green' : 'red');
+  var badgeCls = cls==='red'?'red-b':cls==='green'?'green-b':'yellow-b';
+  var res = it.resonance?'<span class="badge b-tag" style="font-size:9.5px;padding:1px 6px;">共振</span>':'';
+  var hitB = (it.hitN&&it.hitN>=2)?'<span class="badge b-tag" style="font-size:9.5px;padding:1px 6px;background:rgba(99,102,241,.12);color:#6366F1;border:1px solid rgba(99,102,241,.3);">命中'+it.hitN+'信号</span>':'';
+  return `<div class="sig-card ${cls}" data-code="${it.code}" data-name="${it.name}" style="cursor:pointer;">
+    <div class="sig-top">
+      <span class="sig-name">${it.name}</span>
+      <span class="sig-code">${it.code}</span>
+      <span class="sig-tag ${s.tag}">${it.pool}</span>${res}${hitB}
+    </div>
+    <div><span class="sig-badge ${badgeCls}">${s.name}</span></div>
+    <div class="sig-desc">${s.desc}</div>
+  </div>`;
+}
+function viewSignals(){
+  var sig=scanSignals();
+  var now=new Date();
+  var inWin = now.getHours()>=14 && now.getMinutes()>=25;
+  var strongHtml = sig.strong.length ? sig.strong.map(sigCard).join('') :
+    `<div class="sig-empty" style="grid-column:1/-1;">${inWin?'尾盘窗口 14:25-14:55 扫描中，当前无触发信号':'当前无触发信号 · 实时扫描中'}</div>`;
+  var weakHtml = sig.weak.length ? sig.weak.map(sigCard).join('') :
+    `<div class="sig-empty" style="grid-column:1/-1;">暂无弱信号 · 临近买点的标的会出现在这里</div>`;
+  return `
+  <div id="tailSignalPanel">${tailSignalHtml()}</div>
+  <div class="view-title">信号捕捉 · 盘中实时开仓信号</div>
+  <div class="view-sub">三重仓（埋伏/波段/短线）实时扫描 · 红=强信号(埋伏买点/突破/主升/共振) · 绿=波段低吸位 · 黄=临近观察 · 已接入@蚂蚁入场体系(回踩好K/二次回测/巨K不追/首次突破不追/Vegas拐头/顺势第N天/不贪最后一口 S33-S39 全量) · 不构成投资建议</div>
+  ${(function(){
+    var e=scanEscape();
+    var tops=e.filter(function(x){return x.sig.kind!=='trend';});
+    var trends=e.filter(function(x){return x.sig.kind==='trend';});
+    function card(it,border,cls,badge){
+      var s=it.sig;
+      return `<div class="sig-card ${cls}" data-code="${it.code}" data-name="${it.name}" style="cursor:pointer;border-color:${border};">
+        <div class="sig-top"><span class="sig-name">${it.name}</span><span class="sig-code">${it.code}</span><span class="sig-tag sh">${it.pool}</span></div>
+        <div><span class="sig-badge ${badge}">${s.name}</span></div>
+        <div class="sig-desc">${s.desc}</div></div>`;
+    }
+    var topHtml = tops.length ? tops.map(function(it){return card(it,'rgba(234,102,104,.5)','red','red-b');}).join('')
+      : '<div class="sig-empty" style="grid-column:1/-1;color:var(--text3);">当前无高位见顶信号 · 高位放量滞涨/烧香线/子午峰值下拐</div>';
+    var trendHtml = trends.length ? trends.map(function(it){return card(it,'rgba(232,161,61,.45)','yellow','yellow-b');}).join('')
+      : '<div class="sig-empty" style="grid-column:1/-1;color:var(--text3);">当前无趋势破坏标的</div>';
+    return `<div class="card" style="margin-bottom:14px;border:1.5px solid rgba(234,102,104,.45);">
+    <div class="card-hd"><span class="t" style="color:#C2414C;">&#128293; 高位逃顶预警 · 最高优先级</span><span class="meta">S7高位放量滞涨 / S24烧香线 / S25慢的殿后 / S26子午峰值下拐 / S39拐头回落 · 高位见顶 · 触发即至少减半 · 同名开仓信号自动被压制 · 盘中动态：量能/涨幅变化实时更新或撤下，非全天断言</span></div>
+    <div class="card-bd" style="padding:14px;"><div class="sig-board">${topHtml}</div></div>
+  </div>
+  <div class="card" style="margin-bottom:14px;border:1.5px solid rgba(232,161,61,.4);">
+    <div class="card-hd"><span class="t" style="color:#D97706;">📉 趋势破坏 · 减仓提醒（非高位）</span><span class="meta">S2均线空头/破位 · 趋势走坏与位置无关（低位阴跌也会触发） · 动作=减仓/离场，不是高位逃顶 · 盘中动态：随实时数据更新</span></div>
+    <div class="card-bd" style="padding:14px;"><div class="sig-board">${trendHtml}</div></div>
+  </div>`;})()}
+  <div class="sig-bar"><span class="sig-dot"></span>实时扫描中 · 强信号 ${sig.strong.length} 个 · 弱信号 ${sig.weak.length} 个 · 最后更新 ${RT_STATE.last||'—'}</div>
+  <div class="sig-legend">
+    <span class="lg"><span class="swatch r"></span>强信号·可执行候选</span>
+    <span class="lg"><span class="swatch g"></span>波段·触达低吸位</span>
+    <span class="lg"><span class="swatch y"></span>弱信号·临近观察</span>
+  </div>
+  <div class="card">
+    <div class="card-hd"><span class="t" style="color:var(--up);">⚡ 强信号股票池</span><span class="meta">回踩买点/放量突破/CCI主升/右侧启动/触达低吸位</span></div>
+    <div class="card-bd" style="padding:14px;"><div class="sig-board">${strongHtml}</div></div>
+  </div>
+  ${(function(){var bl=sig.escapeBlocked||[];if(!bl.length)return '';return `<div class="card" style="margin-top:14px;border:1px dashed rgba(234,102,104,.55);">
+    <div class="card-hd"><span class="t" style="color:#C2414C;">⚠️ 逃顶压制 · 已移出开仓池</span><span class="meta">同名标的命中逃顶信号（S7/S26/S2/S24）· 逃顶优先于一切买入 · 触发即至少减半 · 禁止开仓</span></div>
+    <div class="card-bd" style="padding:14px;"><div class="sig-board">${bl.map(function(it){
+      return `<div class="sig-card red" style="border-color:rgba(234,102,104,.35);opacity:.85;" data-code="${it.code}" data-name="${it.name}" style="cursor:pointer;">
+        <div class="sig-top"><span class="sig-name">${it.name}</span><span class="sig-code">${it.code}</span><span class="sig-tag sh">开仓信号</span></div>
+        <div><span class="sig-badge red-b">被逃顶压制：${it.sig.name}</span></div>
+        <div class="sig-desc">${it.sig.desc} · 逃顶优先，触发即至少减半，禁止新开仓</div></div>`;}).join('')}</div></div>
+  </div>`;})()}
+  <div class="card" style="margin-top:14px;">
+    <div class="card-hd"><span class="t">🔍 弱信号股票池</span><span class="meta">MACD转正未到买点 / 低位企稳 / 回踩未到位</span></div>
+    <div class="card-bd" style="padding:14px;"><div class="sig-board">${weakHtml}</div></div>
+  </div>
+  <div class="disclaimer">信号由规则化指标自动判定（现价vs买点区间/量比/CCI/MACD/60日位置），仅作客观记录与参考，不构成投资建议。</div>`;
+}
+// ===== 尾盘开仓信号捕捉（14:30-14:55 页面自动显示，替代定时推送） =====
+function tailSignalRows(){
+  var rows=[];
+  var pools={};
+  function rng(buy){
+    if(buy==null||buy==='') return null;
+    var b=String(buy);
+    var m=b.match(/([\d.]+)\s*[-~]\s*([\d.]+)/);
+    if(m) return [parseFloat(m[1]),parseFloat(m[2])];
+    var n=parseFloat(b);
+    return isNaN(n)?null:[n,n];
+  }
+  function push(c,pool,sig,px,chg,vr,turn,buy){
+    rows.push({code:c.code,name:c.name,pool:pool,sig:sig,px:px,chg:chg,vr:vr,turn:turn,buy:buy});
+    (pools[c.code]=pools[c.code]||{})[pool]=1;
+  }
+  function rtOf(c){
+    var g=window['v_'+rtCode(c.code)];
+    if(!g) return null;
+    var r=rtParseStr(g);
+    return (r&&r.now>0)?r:null;
+  }
+  // 埋伏池：回踩买点区 / 站上MA20 / 站上MA60
+  (FAREAST_POOL||[]).forEach(function(c){
+    var r=rtOf(c); if(!r) return;
+    var sigs=[], br=rng(c.buy);
+    if(br && r.now>=br[0] && r.now<=br[1]*1.02) sigs.push('回踩买点区');
+    var ma20=parseFloat(c.ma20), ma60=parseFloat(c.ma60);
+    if(!isNaN(ma20) && r.now>=ma20) sigs.push('站上MA20');
+    if(!isNaN(ma60) && r.now>=ma60) sigs.push('站上MA60');
+    if(sigs.length) push(c,'埋伏池',sigs.join('+'),r.now,r.prev?(r.now-r.prev)/r.prev*100:0,r.vr,r.turnover,c.buy);
+  });
+  // 波段池：破止损 / 触达低吸位±2% / 接近低吸位+6% / 60日低吸区
+  (SWING_POOL||[]).forEach(function(c){
+    var r=rtOf(c); if(!r) return;
+    var buy=parseFloat(c.buy), stop=parseFloat(c.stop), p60=parseFloat(c.p60), sigs=[];
+    if(!isNaN(stop) && r.now<=stop) sigs.push('破止损');
+    else if(!isNaN(buy) && r.now>=buy*0.98 && r.now<=buy*1.02) sigs.push('触达低吸位');
+    else if(!isNaN(buy) && r.now>buy && r.now<=buy*1.06) sigs.push('接近低吸位');
+    if(!isNaN(p60) && p60<40) sigs.push('低吸区');
+    if(sigs.length) push(c,'波段池',sigs.join('+'),r.now,r.prev?(r.now-r.prev)/r.prev*100:0,r.vr,r.turnover,isNaN(buy)?c.buy:buy.toFixed(2));
+  });
+  // 短线池：回踩到位 / 跌破买点区 / 放量（量比≥2）
+  (SHORT_POOL||[]).forEach(function(c){
+    var r=rtOf(c); if(!r) return;
+    var br=rng(c.buy), sigs=[];
+    if(br){
+      if(r.now>=br[0]*0.98 && r.now<=br[1]) sigs.push('回踩到位');
+      else if(r.now<br[0]*0.98) sigs.push('跌破买点区');
+    }
+    if(r.vr>=2) sigs.push(r.chg>0?'放量上攻':'放量');
+    if(sigs.length) push(c,'短线池',sigs.join('+'),r.now,r.prev?(r.now-r.prev)/r.prev*100:0,r.vr,r.turnover,c.buy);
+  });
+  // 多池共振：同一代码在 ≥2 池同时触发
+  rows.forEach(function(x){ if(Object.keys(pools[x.code]||{}).length>=2) x.res=1; });
+  return rows;
+}
+function tailSignalHtml(){
+  var rows=tailSignalRows();
+  var now=new Date();
+  var hh=now.getHours(), mm=now.getMinutes();
+  var inWin=(hh===14&&mm>=30&&mm<55);
+  var winTxt=inWin?'● 监控中（14:30-14:55）':((hh<14||(hh===14&&mm<30))?'○ 未到监控窗口（14:30-14:55）':'○ 窗口已结束（14:30-14:55）');
+  var hit={埋伏池:0,波段池:0,短线池:0};
+  rows.forEach(function(x){ hit[x.pool]++; });
+  var rowsHtml = rows.length? rows.map(function(x){
+    return '<tr>'+
+      '<td><b>'+x.name+'</b><div style="font-size:10px;color:var(--text3);">'+x.code+'</div></td>'+
+      '<td><span class="sig-tag sh">'+x.pool+'</span></td>'+
+      '<td>'+(x.res?'<span class="badge" style="background:#7C3AED;color:#fff;margin-right:4px;">⚡多池共振</span> ':'')+'<span class="sig-badge red-b">'+x.sig+'</span></td>'+
+      '<td><span class="money">'+x.px.toFixed(2)+'</span></td>'+
+      '<td class="'+(x.chg>=0?'up':'down')+'">'+(x.chg>=0?'+':'')+x.chg.toFixed(2)+'%</td>'+
+      '<td>'+x.vr.toFixed(2)+'</td>'+
+      '<td>'+x.turn.toFixed(2)+'%</td>'+
+      '<td style="font-size:12px;">'+x.buy+'</td>'+
+      '<td style="font-size:11px;color:var(--text3);">'+RT_STATE.last+'</td>'+
+    '</tr>';
+  }).join('') : '<tr><td colspan="9" style="text-align:center;color:var(--text3);padding:18px;">当前无触发信号 · 实时扫描中</td></tr>';
+  return '<div class="card" style="margin-bottom:14px;border:1.5px solid rgba(111,98,244,.45);">'+
+    '<div class="card-hd"><span class="t" style="color:#6F62F4;">🕑 尾盘开仓信号捕捉（14:30-14:55）</span>'+
+    '<span class="meta">'+winTxt+' · 触发：埋伏'+hit['埋伏池']+' / 波段'+hit['波段池']+' / 短线'+hit['短线池']+' · 最后更新 '+RT_STATE.last+' · 客观记录，不构成投资建议</span></div>'+
+    '<div class="card-bd" style="padding:0;overflow-x:auto;"><table><thead><tr><th>名称</th><th>池</th><th>信号类型</th><th>现价</th><th>涨跌%</th><th>量比</th><th>换手%</th><th>买入区间/低吸位</th><th>触发时间</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>'+
+  '</div>';
+}
+
+const DIVIDEND_POOL = [
+  {code:'600941',vg:{st:'multi',e144:95.88,e169:96.18,ma20:98.08,ma55:95.08,upDays:2,d:'2026-09-11'},name:'中国移动',dy:4.65,vol:18.1,pe:15.9,now:100.53,chg:-0.27,turn:0.77,buy:95.14,target:105.54,note:'低吸95.14·目标105.54·止损87.53·60日位置79.0%·多头'},
+  {code:'000651',vg:{st:'multi',e144:37.64,e169:37.63,ma20:38.91,ma55:38.21,upDays:0,d:'2026-09-11'},name:'格力电器',dy:7.46,vol:20.4,pe:7.5,now:38.74,chg:0.68,turn:0.58,buy:37.74,target:41.84,note:'低吸37.74·目标41.84·止损34.72·60日位置72.0%·多头'},
+  {code:'601088',vg:{st:'multi',e144:44.1,e169:43.73,ma20:47.09,ma55:44.6,upDays:1,d:'2026-09-11'},name:'中国神华',dy:4.96,vol:20.8,pe:19.6,now:47.78,chg:-0.56,turn:0.13,buy:45.68,target:51.31,note:'低吸45.68·目标51.31·止损41.94·60日位置83.3%·多头'},
+  {code:'600036',vg:{st:'multi',e144:38.6,e169:38.65,ma20:39.93,ma55:38.64,upDays:2,d:'2026-09-10'},name:'招商银行',dy:4.79,vol:21.4,pe:6.9,now:41.07,chg:0.49,turn:0.37,buy:'39-41',target:'46',note:'零售银行龙头·PE仅6.9·股息4.8%'},
+  {code:'601006',name:'大秦铁路',dy:4.30,vol:17.3,pe:16.3,now:4.83,chg:0.42,turn:0.56,buy:'4.6-4.8',target:'5.4',note:'波动率第10低·大秦线垄断·高股息'},
+  {code:'000895',name:'双汇发展',dy:5.48,vol:17.7,pe:16.1,now:23.67,chg:-0.34,turn:0.33,buy:'22-23.5',target:'27',note:'肉制品龙头·股息5.5%·波动率第12低'},
+  {code:'600066',name:'宇通客车',dy:7.65,vol:26.8,pe:13.2,now:26.41,chg:1.24,turn:1.89,buy:'25-26',target:'30',note:'股息率7.6%Top12·客车龙头·出口高景气'},
+  {code:'600219',name:'南山铝业',dy:8.07,vol:24.1,pe:11.8,now:4.52,chg:0.89,turn:1.12,buy:'4.3-4.5',target:'5.2',note:'股息率8.1%Top9·铝业一体化·低估值高分红'},
+  {code:'600023',name:'浙能电力',dy:6.67,vol:22.3,pe:14.5,now:6.18,chg:0.49,turn:0.72,buy:'5.9-6.1',target:'7.0',note:'股息率6.7%Top29·火电绿电双轮·防御稳健'},
+  {code:'601668',name:'中国建筑',dy:5.30,vol:23.5,pe:5.2,now:6.05,chg:0.17,turn:0.94,buy:'5.8-6.0',target:'7.0',note:'股息率5.3%Top85·建筑央企·PE仅5.2·压舱'},
+];
+// 小市值池：市值30-80亿 + 近季度盈利 + PE<60 + 日均成交>3000万（剔除ST）
+const SMALLCAP_POOL = [
+  {code:'001283',name:'豪鹏科技',cap:'63亿',pe:25.8,now:68.30,chg:2.1,turn:3.2,buy:'65-68',target:'78',note:'消费锂电+储能电池·二季度净利+1.2亿·小市值成长'},
+  {code:'001380',name:'华纬科技',cap:'49亿',pe:20.8,now:45.60,chg:1.4,turn:2.8,buy:'44-46',target:'52',note:'弹簧件汽车零部件·机器人概念·二季净利+1.17亿'},
+  {code:'001316',name:'润贝航科',cap:'45亿',pe:20.0,now:27.95,chg:1.9,turn:4.5,buy:'26-28',target:'32',note:'航空耗材·低空经济·量比1.95放量'},
+  {code:'000526',name:'学大教育',cap:'44亿',pe:7.4,now:45.80,chg:2.5,turn:3.5,buy:'43-46',target:'54',note:'教培龙头·PE仅7.4·二季净利+3亿'},
+  {code:'001206',name:'依依股份',cap:'30亿',pe:27.2,now:15.20,chg:1.2,turn:2.0,buy:'14.5-15.2',target:'17.5',note:'宠物卫生用品·小市值·业绩稳健'},
+  {code:'001328',name:'登康口腔',cap:'51亿',pe:24.9,now:26.80,chg:0.8,turn:1.6,buy:'25-27',target:'31',note:'冷酸灵牙膏·消费防御·小市值蓝筹'},
+  {code:'002772',name:'众兴菌业',cap:'43亿',pe:12.8,now:11.43,chg:1.69,turn:4.89,buy:'11-11.5',target:'13',note:'食用菌龙头·PE仅12.8·低估值小市值'},
+  {code:'002040',name:'南京港',cap:'45亿',pe:24.1,now:9.17,chg:3.62,turn:6.54,buy:'8.8-9.2',target:'10.5',note:'港口物流·量价齐升·低估值小市值'},
+  {code:'600551',name:'时代出版',cap:'54亿',pe:13.2,now:7.96,chg:-7.66,turn:12.94,buy:'7.5-8.0',target:'9.2',note:'出版传媒·PE13.2·文化数字化(今日回调后观察)'},
+  {code:'001230',name:'劲旅环境',cap:'38亿',pe:20.7,now:22.31,chg:1.12,turn:3.82,buy:'21-22.5',target:'26',note:'环卫装备+新能源·小市值成长·二季净利+1.7亿'},
+];
+const SWING_POOL = [
+{code:'600237',vg:{st:'bear',e144:9.24,e169:9.21,ma20:8.45,ma55:9.11,upDays:2,d:'2026-09-11'},name:'铜峰电子',now:9.22,chg:10.02,turn:16.22,vr:3.92,score:86,tag:'扫描入选·共振3',buy:8.2,target:10.33,stop:7.54,p60:30.3,l60:7.01,h60:14.31,trend:'空头',pos:'低位·可低吸',note:'低吸8.2·目标10.33·止损7.54·60日位置30.3%·空头·扫描共振3条'},
+{code:'002179',vg:{st:'bear',e144:36.17,e169:36.24,ma20:34.55,ma55:36.0,upDays:3,d:'2026-09-11'},name:'中航光电',now:35.22,chg:1.12,turn:1.37,vr:1.85,score:86,tag:'扫描入选·共振3',buy:33.51,target:47.68,stop:30.83,p60:21.8,l60:31.88,h60:47.21,trend:'空头',pos:'低位·可低吸',note:'低吸33.51·目标47.68·止损30.83·60日位置21.8%·空头·扫描共振3条'},
+{code:'301155',vg:{st:'bear',e144:53.85,e169:55.91,ma20:40.39,ma55:41.75,upDays:2,d:'2026-09-11'},name:'海力风电',now:40.18,chg:4.07,turn:8.2,vr:2.5,score:86,tag:'扫描入选·共振3',buy:39.18,target:52.25,stop:36.05,p60:25.9,l60:36.14,h60:51.73,trend:'空头',pos:'低位·可低吸',note:'低吸39.18·目标52.25·止损36.05·60日位置25.9%·空头·扫描共振3条'},
+{code:'301013',vg:{st:'bear',e144:39.89,e169:38.7,ma20:39.63,ma55:45.53,upDays:1,d:'2026-09-11'},name:'利和兴',now:37.62,chg:3.69,turn:12.07,vr:1.75,score:86,tag:'扫描入选·共振3',buy:38.44,target:42.13,stop:35.36,p60:11.8,l60:31.03,h60:86.79,trend:'空头',pos:'低位·可低吸',note:'低吸38.44·目标42.13·止损35.36·60日位置11.8%·空头·扫描共振3条·高波动降级'},
+{code:'600350',vg:{st:'bear',e144:10.57,e169:10.49,ma20:10.38,ma55:11.11,upDays:2,d:'2026-09-11'},name:'山东高速',now:10.12,chg:1.61,turn:0.5,vr:2.0,score:88,tag:'箱体波段',buy:10.07,target:13.62,stop:9.26,p60:8.0,l60:9.86,h60:13.49,trend:'空头',pos:'低位·可低吸',note:'低吸10.07·目标13.62·止损9.26·60日位置8.0%·空头'},
+{code:'002475',vg:{st:'bear',e144:59.03,e169:58.48,ma20:55.82,ma55:58.48,upDays:1,d:'2026-09-11'},name:'立讯精密',now:54.45,chg:-2.52,turn:1.06,vr:0.86,score:82,tag:'箱体波段',buy:54.15,target:76.92,stop:49.82,p60:14.5,l60:51.88,h60:76.16,trend:'空头',pos:'低位·可低吸',note:'低吸54.15·目标76.92·止损49.82·60日位置14.5%·空头'},
+{code:'002129',vg:{st:'bear',e144:9.43,e169:9.4,ma20:9.39,ma55:9.59,upDays:0,d:'2026-09-10'},name:'TCL中环',now:8.86,chg:-2.74,turn:1.46,vr:1.21,score:88,tag:'用户认可',buy:8.75,target:9.92,stop:7.97,p60:10.2,l60:8.5,h60:12.02,trend:'空头',pos:'低位·可低吸',note:'低吸8.75·目标9.92·止损7.97·60日位置10.2%·空头'},
+{code:'603341',vg:{st:'bear',e144:38.93,e169:39.16,ma20:37.11,ma55:38.24,upDays:0,d:'2026-09-11'},name:'龙旗科技',now:35.81,chg:-1.78,turn:2.21,vr:0.65,score:80,tag:'用户认可',buy:36.0,target:45.87,stop:33.12,p60:4.2,l60:34.66,h60:45.42,trend:'空头',pos:'低位·可低吸',note:'低吸36.0·目标45.87·止损33.12·60日位置4.2%·空头'},
+{code:'300738',vg:{st:'bear',e144:21.67,e169:21.67,ma20:20.64,ma55:21.13,upDays:0,d:'2026-09-11'},name:'奥飞数据',now:19.44,chg:-1.52,turn:1.9,vr:0.71,score:80,tag:'成长宽幅震荡',buy:20.02,target:24.42,stop:18.42,p60:11.9,l60:18.5,h60:24.18,trend:'空头',pos:'低位·可低吸',note:'低吸20.02·目标24.42·止损18.42·60日位置11.9%·空头'},
+{code:'000962',vg:{st:'bear',e144:51.59,e169:50.08,ma20:53.62,ma55:56.69,upDays:0,d:'2026-09-11'},name:'东方钽业',now:51.14,chg:-3.09,turn:2.42,vr:0.62,score:68,tag:'强趋势',buy:'47.61-48.85',target:'55.54',stop:'46.12',p60:15.9,l60:40.78,h60:96.24,trend:'空头',pos:'低位·可低吸',note:'回踩47.61-48.85低吸·破46.12止损·目标55.54·60日位置15.9%'},
+{code:'002134',vg:{st:'bear',e144:23.86,e169:23.84,ma20:22.06,ma55:23.12,upDays:2,d:'2026-09-10'},name:'天津普林',now:22.4,chg:1.27,turn:4.01,vr:0.97,score:70,tag:'假阴突破',buy:21.84,target:25.09,stop:20.16,p60:34.8,l60:18.11,h60:30.44,trend:'空头',pos:'低位·可低吸',note:'低吸21.84·目标25.09·止损20.16·60日位置34.8%·空头·S14二次探底,S23三日阳'},
+{code:'600030',vg:{st:'bear',e144:27.25,e169:27.2,ma20:27.51,ma55:28.0,upDays:0,d:'2026-09-11'},name:'中信证券',now:27.6,chg:0.99,turn:0.83,vr:0.96,score:84,tag:'箱体波段',buy:26.68,target:30.18,stop:24.55,p60:15.4,l60:26.38,h60:29.88,trend:'空头',pos:'低位·可低吸',note:'低吸26.68·目标30.18·止损24.55·60日位置15.4%·空头'},
+{code:'601138',vg:{st:'multi',e144:62.34,e169:61.36,ma20:63.56,ma55:63.22,upDays:1,d:'2026-09-11'},name:'工业富联',now:63.91,chg:-2.04,turn:0.29,vr:0.49,score:78,tag:'箱体波段',buy:61.65,target:79.55,stop:56.72,p60:43.9,l60:52.57,h60:78.76,trend:'多头',pos:'中位·回踩介入',note:'低吸61.65·目标79.55·止损56.72·60日位置43.9%·多头'},
+{code:'601901',vg:{st:'bear',e144:7.07,e169:7.11,ma20:6.83,ma55:6.96,upDays:0,d:'2026-09-11'},name:'方正证券',now:6.97,chg:1.31,turn:0.66,vr:1.54,score:82,tag:'网格震荡',buy:6.63,target:7.79,stop:6.1,p60:21.7,l60:6.54,h60:7.71,trend:'空头',pos:'低位·可低吸',note:'低吸6.63·目标7.79·止损6.1·60日位置21.7%·空头'},
+{code:'600958',vg:{st:'bear',e144:9.36,e169:9.41,ma20:9.1,ma55:9.12,upDays:0,d:'2026-09-11'},name:'东方证券',now:9.18,chg:0.44,turn:0.45,vr:0.71,score:79,tag:'网格震荡',buy:8.83,target:9.83,stop:8.12,p60:16.5,l60:8.76,h60:9.73,trend:'空头',pos:'低位·可低吸',note:'低吸8.83·目标9.83·止损8.12·60日位置16.5%·空头'},
+{code:'301626',vg:{st:'multi',e144:256.09,e169:249.9,ma20:268.13,ma55:267.39,upDays:0,d:'2026-09-11'},name:'苏州天脉',now:295.25,chg:2.01,turn:6.23,vr:1.31,score:80,tag:'扫描新增',buy:260.09,target:390.88,stop:239.28,p60:51.7,l60:189.0,h60:387.01,trend:'多头',pos:'中位·回踩介入',note:'低吸260.09·目标390.88·止损239.28·60日位置51.7%·多头'},
+{code:'688519',vg:{st:'multi',e144:233.1,e169:220.46,ma20:293.25,ma55:291.44,upDays:3,d:'2026-09-11'},name:'南亚新材',now:309.59,chg:6.15,turn:2.81,vr:1.28,score:80,tag:'扫描新增',buy:284.45,target:444.22,stop:261.69,p60:54.5,l60:192.0,h60:439.82,trend:'多头',pos:'中位·回踩介入',note:'低吸284.45·目标444.22·止损261.69·60日位置54.5%·多头·高波动降级'},
+{code:'688809',vg:{st:'multi',e144:435.22,e169:423.23,ma20:458.73,ma55:476.48,upDays:0,d:'2026-09-11'},name:'强一股份',now:499.0,chg:4.61,turn:7.89,vr:0.95,score:80,tag:'扫描新增',buy:444.97,target:677.71,stop:409.37,p60:45.0,l60:350.59,h60:671.0,trend:'多头',pos:'中位·回踩介入',note:'低吸444.97·目标677.71·止损409.37·60日位置45.0%·多头'},
+{code:'600096',vg:{st:'bear',e144:30.86,e169:30.76,ma20:30.59,ma55:29.8,upDays:0,d:'2026-09-11'},name:'云天化',now:30.67,chg:-3.0,turn:1.77,vr:0.85,score:70,tag:'箱体波段',buy:29.67,target:34.78,stop:27.3,p60:37.2,l60:26.27,h60:34.44,trend:'空头',pos:'中位·回踩介入',note:'低吸29.67·目标34.78·止损27.3·60日位置37.2%·空头'},
+{code:'601377',vg:{st:'bear',e144:6.04,e169:6.07,ma20:5.88,ma55:5.96,upDays:0,d:'2026-09-11'},name:'兴业证券',now:5.97,chg:0.67,turn:0.66,vr:0.85,score:83,tag:'网格震荡',buy:5.7,target:6.34,stop:5.24,p60:25.4,l60:5.69,h60:6.28,trend:'空头',pos:'低位·可低吸',note:'低吸5.7·目标6.34·止损5.24·60日位置25.4%·空头'},
+{code:'300825',vg:{st:'multi',e144:11.5,e169:11.42,ma20:11.65,ma55:11.44,upDays:0,d:'2026-09-11'},name:'阿尔特',now:13.39,chg:4.69,turn:6.55,vr:1.18,score:80,tag:'扫描新增',buy:11.3,target:14.52,stop:10.4,p60:49.4,l60:7.9,h60:18.15,trend:'多头',pos:'中位·回踩介入',note:'低吸11.3·目标14.52·止损10.4·60日位置49.4%·多头'},
+{code:'601000',vg:{st:'multi',e144:4.38,e169:4.34,ma20:4.57,ma55:4.52,upDays:0,d:'2026-09-11'},name:'唐山港',now:4.58,chg:0.22,turn:0.67,vr:0.93,score:88,tag:'箱体波段',buy:4.43,target:5.08,stop:4.08,p60:52.8,l60:3.97,h60:5.03,trend:'多头',pos:'中位·回踩介入',note:'低吸4.43·目标5.08·止损4.08·60日位置52.8%·多头'},
+{code:'000538',vg:{st:'bear',e144:51.38,e169:51.6,ma20:50.23,ma55:50.38,upDays:0,d:'2026-09-11'},name:'云南白药',now:50.4,chg:-0.14,turn:0.3,vr:0.76,score:76,tag:'箱体波段',buy:48.72,target:54.43,stop:44.82,p60:58.1,l60:46.29,h60:53.37,trend:'空头',pos:'中位·回踩介入',note:'低吸48.72·目标54.43·止损44.82·60日位置58.1%·空头'},
+{code:'600233',vg:{st:'cross',e144:17.8,e169:17.73,ma20:17.34,ma55:17.61,upDays:3,d:'2026-09-11'},name:'圆通速递',now:17.59,chg:4.7,turn:1.05,vr:1.68,score:90,tag:'扫描新增',buy:16.82,target:19.62,stop:15.47,p60:64.9,l60:14.9,h60:19.43,trend:'拐头',pos:'高位·不追',note:'低吸16.82·目标19.62·止损15.47·60日位置64.9%·拐头'},
+{code:'601628',vg:{st:'bear',e144:38.4,e169:38.6,ma20:38.05,ma55:38.3,upDays:0,d:'2026-09-11'},name:'中国人寿',now:38.28,chg:0.34,turn:0.11,vr:0.63,score:76,tag:'箱体波段',buy:36.91,target:42.42,stop:33.96,p60:57.9,l60:32.48,h60:42.0,trend:'空头',pos:'中位·回踩介入',note:'低吸36.91·目标42.42·止损33.96·60日位置57.9%·空头'},
+{code:'601108',vg:{st:'bear',e144:8.39,e169:8.36,ma20:8.61,ma55:8.59,upDays:0,d:'2026-09-11'},name:'财通证券',now:8.57,chg:1.18,turn:0.92,vr:0.72,score:85,tag:'网格震荡',buy:8.35,target:9.35,stop:7.68,p60:42.1,l60:7.43,h60:9.26,trend:'空头',pos:'中位·回踩介入',note:'低吸8.35·目标9.35·止损7.68·60日位置42.1%·空头'},
+{code:'600900',vg:{st:'multi',e144:27.23,e169:27.15,ma20:28.17,ma55:27.91,upDays:3,d:'2026-09-10'},name:'长江电力',now:28.09,chg:0.14,turn:0.25,vr:0.66,score:88,tag:'用户认可',buy:27.39,target:31.46,stop:25.28,p60:65.5,l60:25.43,h60:29.49,trend:'多头',pos:'中位·等回踩',note:'低吸27.39·目标31.46·止损25.28·60日位置65.5%·多头·S14二次探底,S23三日阳'},
+{code:'600025',vg:{st:'multi',e144:9.57,e169:9.54,ma20:9.69,ma55:9.71,upDays:1,d:'2026-09-11'},name:'华能水电',now:9.72,chg:-0.31,turn:0.11,vr:0.66,score:88,tag:'箱体波段',buy:9.4,target:10.62,stop:8.65,p60:68.3,l60:8.64,h60:10.38,trend:'多头',pos:'高位·不追',note:'低吸9.4·目标10.62·止损8.65·60日位置68.3%·多头'},
+{code:'600985',vg:{st:'multi',e144:14.96,e169:14.71,ma20:17.41,ma55:15.93,upDays:0,d:'2026-09-11'},name:'淮北矿业',now:17.2,chg:-0.35,turn:0.6,vr:0.63,score:82,tag:'箱体波段',buy:16.89,target:18.96,stop:15.08,p60:60.1,l60:13.61,h60:18.77,trend:'多头',pos:'高位·不追',note:'低吸16.89·目标18.96·止损15.08·60日位置60.1%·多头'},
+{code:'600690',vg:{st:'bear',e144:21.38,e169:21.55,ma20:21.2,ma55:20.81,upDays:0,d:'2026-09-11'},name:'海尔智家',now:21.17,chg:-0.61,turn:0.45,vr:0.82,score:76,tag:'箱体波段',buy:20.56,target:22.85,stop:18.92,p60:62.1,l60:18.38,h60:22.62,trend:'空头',pos:'高位·不追',note:'低吸20.56·目标22.85·止损18.92·60日位置62.1%·空头'},
+{code:'600887',vg:{st:'multi',e144:25.96,e169:25.97,ma20:26.17,ma55:26.02,upDays:2,d:'2026-09-11'},name:'伊利股份',now:26.54,chg:0.34,turn:0.78,vr:0.86,score:80,tag:'箱体波段',buy:25.38,target:28.79,stop:23.35,p60:73.6,l60:23.76,h60:27.7,trend:'多头',pos:'高位·不追',note:'低吸25.38·目标28.79·止损23.35·60日位置73.6%·多头'},
+{code:'601898',vg:{st:'multi',e144:14.49,e169:14.41,ma20:14.77,ma55:13.8,upDays:0,d:'2026-09-11'},name:'中煤能源',now:14.93,chg:-1.32,turn:0.33,vr:0.68,score:70,tag:'箱体波段',buy:14.33,target:16.45,stop:13.04,p60:65.7,l60:11.74,h60:16.29,trend:'多头',pos:'高位·不追',note:'低吸14.33·目标16.45·止损13.04·60日位置65.7%·多头'},
+{code:'000651',vg:{st:'multi',e144:37.65,e169:37.65,ma20:38.87,ma55:38.15,upDays:2,d:'2026-09-10'},name:'格力电器',now:38.95,chg:0.21,turn:0.39,vr:0.61,score:84,tag:'箱体波段',buy:37.98,target:43.62,stop:35.06,p60:73.6,l60:34.72,h60:40.47,trend:'多头',pos:'高位·防守',note:'低吸37.98·目标43.62·止损35.06·60日位置73.6%·多头·S23三日阳,S33回踩好K'},
+{code:'600061',vg:{st:'bear',e144:6.63,e169:6.68,ma20:6.41,ma55:6.46,upDays:0,d:'2026-09-11'},name:'国投资本',now:6.56,chg:1.23,turn:0.58,vr:1.16,score:80,tag:'网格震荡',buy:6.22,target:6.8,stop:5.72,p60:28.0,l60:6.15,h60:6.7,trend:'空头',pos:'低位·可低吸',note:'低吸6.22·目标6.8·止损5.72·60日位置28.0%·空头'},
+{code:'600941',vg:{st:'multi',e144:95.76,e169:96.0,ma20:98.08,ma55:94.89,upDays:1,d:'2026-09-10'},name:'中国移动',now:97.17,chg:0.06,turn:0.59,vr:0.69,score:76,tag:'箱体波段',buy:94.74,target:108.83,stop:87.45,p60:75.3,l60:86.13,h60:100.8,trend:'多头',pos:'高位·防守',note:'低吸94.74·目标108.83·止损87.45·60日位置75.3%·多头·S33回踩好K'},
+{code:'601919',vg:{st:'multi',e144:15.0,e169:14.91,ma20:16.61,ma55:15.43,upDays:0,d:'2026-09-11'},name:'中远海控',now:16.38,chg:-0.97,turn:0.48,vr:0.71,score:88,tag:'箱体波段',buy:16.11,target:17.7,stop:14.51,p60:70.0,l60:13.08,h60:17.52,trend:'多头',pos:'高位·不追',note:'低吸16.11·目标17.7·止损14.51·60日位置70.0%·多头'},
+{code:'600031',vg:{st:'cross',e144:19.6,e169:19.65,ma20:19.43,ma55:19.22,upDays:0,d:'2026-09-11'},name:'三一重工',now:20.01,chg:-1.04,turn:0.53,vr:0.88,score:76,tag:'箱体波段',buy:18.85,target:21.36,stop:17.34,p60:75.6,l60:16.5,h60:20.84,trend:'拐头',pos:'高位·不追',note:'低吸18.85·目标21.36·止损17.34·60日位置75.6%·拐头'},
+{code:'601225',vg:{st:'multi',e144:24.14,e169:23.88,ma20:26.2,ma55:24.77,upDays:0,d:'2026-09-11'},name:'陕西煤业',now:26.09,chg:-1.7,turn:0.32,vr:0.79,score:88,tag:'用户认可',buy:25.41,target:28.13,stop:23.26,p60:77.5,l60:20.02,h60:27.8,trend:'多头',pos:'高位·不追',note:'低吸25.41·目标28.13·止损23.26·60日位置77.5%·多头'},
+{code:'601728',vg:{st:'multi',e144:6.0,e169:6.02,ma20:6.27,ma55:5.98,upDays:2,d:'2026-09-11'},name:'中国电信',now:6.19,chg:1.14,turn:0.12,vr:1.24,score:80,tag:'箱体波段',buy:6.08,target:6.79,stop:5.59,p60:85.6,l60:4.99,h60:6.51,trend:'多头',pos:'高位·不追',note:'低吸6.08·目标6.79·止损5.59·60日位置85.6%·多头'},
+{code:'600886',vg:{st:'multi',e144:13.64,e169:13.6,ma20:14.04,ma55:13.97,upDays:0,d:'2026-09-11'},name:'国投电力',now:14.46,chg:0.63,turn:0.27,vr:0.84,score:88,tag:'箱体波段',buy:13.62,target:15.62,stop:12.53,p60:80.8,l60:12.31,h60:14.97,trend:'多头',pos:'高位·不追',note:'低吸13.62·目标15.62·止损12.53·60日位置80.8%·多头'},
+{code:'601666',vg:{st:'multi',e144:8.52,e169:8.46,ma20:9.54,ma55:8.62,upDays:0,d:'2026-09-11'},name:'平煤股份',now:9.53,chg:-1.24,turn:1.01,vr:0.76,score:88,tag:'箱体波段',buy:9.25,target:10.36,stop:8.15,p60:70.0,l60:7.03,h60:10.26,trend:'多头',pos:'高位·不追',note:'低吸9.25·目标10.36·止损8.15·60日位置70.0%·多头'},
+{code:'002493',vg:{st:'multi',e144:12.38,e169:12.22,ma20:14.02,ma55:12.67,upDays:0,d:'2026-09-11'},name:'荣盛石化',now:14.37,chg:-5.09,turn:0.66,vr:1.37,score:70,tag:'箱体波段',buy:13.6,target:15.43,stop:11.97,p60:64.9,l60:10.5,h60:15.28,trend:'多头',pos:'高位·不追',note:'低吸13.6·目标15.43·止损11.97·60日位置64.9%·多头'},
+{code:'001872',vg:{st:'multi',e144:21.28,e169:21.13,ma20:23.2,ma55:21.87,upDays:0,d:'2026-09-11'},name:'招商港口',now:23.54,chg:0.47,turn:0.12,vr:0.88,score:88,tag:'箱体波段',buy:22.5,target:25.21,stop:20.57,p60:75.3,l60:18.4,h60:24.96,trend:'多头',pos:'高位·不追',note:'低吸22.5·目标25.21·止损20.57·60日位置75.3%·多头'},
+{code:'000333',vg:{st:'multi',e144:79.86,e169:79.09,ma20:85.95,ma55:83.88,upDays:3,d:'2026-09-11'},name:'美的集团',now:86.2,chg:0.21,turn:0.3,vr:1.06,score:84,tag:'箱体波段',buy:83.37,target:93.16,stop:76.7,p60:81.2,l60:72.28,h60:89.5,trend:'多头',pos:'高位·不追',note:'低吸83.37·目标93.16·止损76.7·60日位置81.2%·多头'},
+{code:'601318',vg:{st:'multi',e144:53.92,e169:54.11,ma20:54.27,ma55:52.16,upDays:0,d:'2026-09-11'},name:'中国平安',now:55.52,chg:0.43,turn:0.42,vr:0.53,score:72,tag:'箱体波段',buy:52.64,target:59.22,stop:48.43,p60:73.7,l60:45.92,h60:58.01,trend:'多头',pos:'高位·不追',note:'低吸52.64·目标59.22·止损48.43·60日位置73.7%·多头'},
+{code:'688448',vg:{st:'multi',e144:52.36,e169:50.8,ma20:65.73,ma55:57.5,upDays:0,d:'2026-09-11'},name:'磁谷科技',now:67.18,chg:-0.13,turn:1.7,vr:0.56,score:78,tag:'用户认可',buy:63.76,target:73.62,stop:54.61,p60:79.7,l60:36.41,h60:72.89,trend:'多头',pos:'高位·不追',note:'低吸63.76·目标73.62·止损54.61·60日位置79.7%·多头'},
+{code:'600309',vg:{st:'multi',e144:74.21,e169:73.79,ma20:74.87,ma55:72.73,upDays:0,d:'2026-09-11'},name:'万华化学',now:77.15,chg:-2.18,turn:0.79,vr:0.76,score:76,tag:'箱体波段',buy:72.62,target:80.46,stop:66.81,p60:70.1,l60:65.19,h60:78.47,trend:'多头',pos:'高位·不追',note:'低吸72.62·目标80.46·止损66.81·60日位置70.1%·多头'},
+{code:'601872',vg:{st:'multi',e144:16.09,e169:15.59,ma20:18.82,ma55:17.24,upDays:0,d:'2026-09-10'},name:'招商轮船',now:20.58,chg:-1.95,turn:2.66,vr:1.66,score:76,tag:'强趋势',buy:19.91,target:23.05,stop:17.88,p60:86.1,l60:13.91,h60:21.66,trend:'多头',pos:'高位·防守',note:'低吸19.91·目标23.05·止损17.88·60日位置86.1%·多头·S3均线多头'},
+{code:'601088',vg:{st:'multi',e144:44.06,e169:43.69,ma20:46.95,ma55:44.44,upDays:0,d:'2026-09-10'},name:'中国神华',now:47.28,chg:-0.11,turn:0.12,vr:0.69,score:88,tag:'用户认可',buy:46.09,target:52.95,stop:42.55,p60:86.1,l60:38.01,h60:48.78,trend:'多头',pos:'高位·防守',note:'低吸46.09·目标52.95·止损42.55·60日位置86.1%·多头·S33回踩好K'},
+{code:'600803',vg:{st:'multi',e144:18.13,e169:18.18,ma20:18.31,ma55:17.27,upDays:1,d:'2026-09-11'},name:'新奥股份',now:18.74,chg:-1.37,turn:0.36,vr:1.0,score:72,tag:'箱体波段',buy:17.76,target:20.54,stop:16.25,p60:87.7,l60:14.54,h60:19.65,trend:'多头',pos:'高位·不追',note:'低吸17.76·目标20.54·止损16.25·60日位置87.7%·多头'},
+{code:'601398',vg:{st:'multi',e144:7.53,e169:7.5,ma20:7.94,ma55:7.68,upDays:3,d:'2026-09-11'},name:'工商银行',now:8.1,chg:1.25,turn:0.08,vr:0.74,score:84,tag:'箱体波段',buy:7.7,target:8.76,stop:7.08,p60:86.6,l60:6.95,h60:8.29,trend:'多头',pos:'高位·不追',note:'低吸7.7·目标8.76·止损7.08·60日位置86.6%·多头'},
+{code:'601985',vg:{st:'multi',e144:8.84,e169:8.83,ma20:8.9,ma55:8.86,upDays:0,d:'2026-09-11'},name:'中国核电',now:9.08,chg:0.55,turn:0.39,vr:0.7,score:82,tag:'箱体波段',buy:8.63,target:9.77,stop:7.94,p60:76.1,l60:8.54,h60:9.21,trend:'多头',pos:'高位·不追',note:'低吸8.63·目标9.77·止损7.94·60日位置76.1%·多头'},
+{code:'601857',vg:{st:'multi',e144:10.57,e169:10.48,ma20:11.17,ma55:10.56,upDays:0,d:'2026-09-11'},name:'中国石油',now:11.27,chg:-0.44,turn:0.07,vr:1.03,score:74,tag:'箱体波段',buy:10.83,target:12.14,stop:9.92,p60:87.2,l60:8.59,h60:11.63,trend:'多头',pos:'高位·不追',note:'低吸10.83·目标12.14·止损9.92·60日位置87.2%·多头'},
+{code:'600018',vg:{st:'multi',e144:5.1,e169:5.1,ma20:5.33,ma55:5.14,upDays:0,d:'2026-09-11'},name:'上港集团',now:5.52,chg:0.36,turn:0.19,vr:0.73,score:80,tag:'箱体波段',buy:5.17,target:5.93,stop:4.76,p60:90.0,l60:4.5,h60:5.6,trend:'多头',pos:'高位·不追',note:'低吸5.17·目标5.93·止损4.76·60日位置90.0%·多头'}
+];;
+;
+
+// 埋伏池（反转埋伏：复刻远东股份模式=业绩困境反转+低位深调+放量启动+右侧确认，2026-09-04入选，用时间验证）
+// 入选标准：①扣非净利反转(增速≥80%且为正) ②距近一年低点反弹10-40% ③收盘站上20日线 ④近20日有放量大阳/涨停启动 ⑤近10日不创新低 ⑥题材景气
+const FAREAST_POOL = [
+{code:'603678',vg:{st:'multi',e144:46.94,e169:46.12,ma20:47.11,ma55:52.19,upDays:5,d:'2026-09-11'},name:'火炬电子',now:49.7,chg:6.04,pos250:21.5,pos60:21.5,ma20:47.11,ma60:53.68,low60:38.3,rb:29.8,r20:-3.8,vr:2.51,ind:{macd:0,kdj:0,cci:0,adx:0,wr:0,boll:'38.3-91.3',turnover:8.81},kf:'全市场扫描·信号4',gross:'主力净流入1.42亿',theme:'扫描入选·S09放量上攻,S14二次探底,S23三日阳',buy:'43.81-46.4',target:'55.66→69.57',stop:36.38,date:'2026-09-11',status:'扫描新增·右侧确认',note:'现价49.7·+6.04%·MA20(47.11)·60日位置21.5%·低吸43.81-46.4·破36.38止损·扫描共振4条'},
+{code:'002600',vg:{st:'bear',e144:13.73,e169:13.72,ma20:12.54,ma55:13.2,upDays:3,d:'2026-09-11'},name:'领益智造',now:13.1,chg:2.02,pos250:27.9,pos60:27.9,ma20:12.54,ma60:13.51,low60:11.0,rb:19.1,r20:3.4,vr:1.93,ind:{macd:0,kdj:0,cci:0,adx:0,wr:0,boll:'11.0-18.52',turnover:2.76},kf:'全市场扫描·信号4',gross:'主力净流入1.11亿',theme:'扫描入选·S09放量上攻,S14二次探底,S23三日阳',buy:'11.66-12.35',target:'18.15→20.0',stop:10.45,date:'2026-09-11',status:'扫描新增·右侧确认',note:'现价13.1·+2.02%·MA20(12.54)·60日位置27.9%·低吸11.66-12.35·破10.45止损·扫描共振4条'},
+{code:'603606',vg:{st:'bear',e144:41.97,e169:42.55,ma20:34.74,ma55:38.14,upDays:4,d:'2026-09-11'},name:'东方电缆',now:35.65,chg:3.36,pos250:23.6,pos60:23.6,ma20:34.74,ma60:38.24,low60:32.99,rb:8.1,r20:-6.2,vr:2.33,ind:{macd:0,kdj:0,cci:0,adx:0,wr:0,boll:'32.99-44.25',turnover:3.44},kf:'全市场扫描·信号4',gross:'主力净流入0.9953亿',theme:'扫描入选·S09放量上攻,S14二次探底,S23三日阳',buy:'33.65-34.22',target:'43.37→47.79',stop:31.34,date:'2026-09-11',status:'扫描新增·右侧确认',note:'现价35.65·+3.36%·MA20(34.74)·60日位置23.6%·低吸33.65-34.22·破31.34止损·扫描共振4条'},
+{code:'300196',vg:{st:'bear',e144:18.8,e169:18.58,ma20:17.11,ma55:18.37,upDays:5,d:'2026-09-11'},name:'长海股份',now:18.79,chg:8.36,pos250:22.4,pos60:22.4,ma20:17.11,ma60:19.46,low60:14.37,rb:30.8,r20:1.7,vr:3.49,ind:{macd:0,kdj:0,cci:0,adx:0,wr:0,boll:'14.37-34.06',turnover:18.09},kf:'全市场扫描·信号4',gross:'主力净流入0.6799亿',theme:'扫描入选·S09放量上攻,S14二次探底,S23三日阳',buy:'15.91-16.85',target:'21.04→26.3',stop:13.65,date:'2026-09-11',status:'扫描新增·右侧确认',note:'现价18.79·+8.36%·MA20(17.11)·60日位置22.4%·低吸15.91-16.85·破13.65止损·扫描共振4条'},
+{code:'600522',vg:{st:'bear',e144:34.53,e169:33.53,ma20:33.75,ma55:36.6,upDays:1,d:'2026-09-11'},name:'中天科技',now:34.49,chg:3.57,pos250:18.3,pos60:18.3,ma20:33.75,ma60:38.74,low60:27.02,rb:27.6,r20:-3.0,vr:1.63,ind:{macd:0,kdj:0,cci:0,adx:0,wr:0,boll:'27.02-67.84',turnover:7.78},kf:'全市场扫描·信号3',gross:'主力净流入6.93亿',theme:'扫描入选·S09放量上攻,S14二次探底,S23三日阳',buy:'31.39-33.24',target:'39.9→48.29',stop:25.67,date:'2026-09-11',status:'扫描新增·右侧确认',note:'现价34.49·+3.57%·MA20(33.75)·60日位置18.3%·低吸31.39-33.24·破25.67止损·扫描共振3条'},
+{code:'600105',vg:{st:'multi',e144:39.18,e169:37.82,ma20:39.67,ma55:41.6,upDays:1,d:'2026-09-11'},name:'永鼎股份',now:42.2,chg:4.51,pos250:29.2,pos60:29.2,ma20:39.67,ma60:43.7,low60:29.11,rb:45.0,r20:2.1,vr:1.75,ind:{macd:0,kdj:0,cci:0,adx:0,wr:0,boll:'29.11-73.97',turnover:14.13},kf:'全市场扫描·信号3',gross:'主力净流入5.58亿',theme:'扫描入选·S09放量上攻,S14二次探底,S23三日阳',buy:'36.89-39.07',target:'47.26→59.07',stop:27.65,date:'2026-09-11',status:'扫描新增·右侧确认',note:'现价42.2·+4.51%·MA20(39.67)·60日位置29.2%·低吸36.89-39.07·破27.65止损·扫描共振3条'},
+{code:'002487',vg:{st:'bear',e144:51.49,e169:52.04,ma20:35.72,ma55:41.0,upDays:2,d:'2026-09-11'},name:'大金重工',now:35.3,chg:5.25,pos250:10.5,pos60:10.5,ma20:35.72,ma60:42.44,low60:32.04,rb:10.2,r20:-15.7,vr:4.26,ind:{macd:0,kdj:0,cci:0,adx:0,wr:0,boll:'32.04-63.16',turnover:11.45},kf:'全市场扫描·信号3',gross:'主力净流入3.49亿',theme:'扫描入选·S09放量上攻,S14二次探底,S23三日阳',buy:'33.22-34.95',target:'43.71→49.42',stop:30.44,date:'2026-09-11',status:'扫描新增·左侧观察',note:'现价35.3·+5.25%·MA20(35.72)·60日位置10.5%·低吸33.22-34.95·破30.44止损·扫描共振3条'},
+{code:'603267',vg:{st:'bear',e144:55.11,e169:55.1,ma20:48.74,ma55:52.89,upDays:1,d:'2026-09-11'},name:'鸿远电子',now:50.2,chg:5.31,pos250:20.5,pos60:20.5,ma20:48.74,ma60:54.9,low60:41.4,rb:21.3,r20:-4.0,vr:2.54,ind:{macd:0,kdj:0,cci:0,adx:0,wr:0,boll:'41.4-84.4',turnover:5.51},kf:'全市场扫描·信号3',gross:'主力净流入0.4699亿',theme:'扫描入选·S09放量上攻,S14二次探底,S23三日阳',buy:'45.33-48.01',target:'56.55→70.28',stop:39.33,date:'2026-09-11',status:'扫描新增·右侧确认',note:'现价50.2·+5.31%·MA20(48.74)·60日位置20.5%·低吸45.33-48.01·破39.33止损·扫描共振3条'},
+{code:'300065',vg:{st:'bear',e144:19.61,e169:19.81,ma20:15.7,ma55:17.71,upDays:0,d:'2026-09-11'},name:'海兰信',now:16.34,chg:1.05,pos250:13.0,pos60:13.4,ma20:15.75,ma60:17.97,low60:14.41,rb:10.9,r20:-1.4,vr:2.29,ind:{macd:-0.328,kdj:55.2,cci:192.5,adx:47.1,wr:19.2,boll:'14.33/17.17',turnover:10.28},kf:'扫描入选·信号3',gross:'年化波动85.0%·位置13.4%',theme:'全市场扫描·S09放量上攻,S14二次探底,S23三日阳',buy:'14.7-15.46',target:'18.46→22.22',stop:13.69,date:'2026-09-11',status:'回踩区间低吸',note:'现价15.87·60日位置9.8%·MA20(15.7)·低吸14.7-15.46·破13.69止损·右侧确认'},
+{code:'600176',vg:{st:'multi',e144:38.45,e169:36.87,ma20:42.39,ma55:46.77,upDays:2,d:'2026-09-10'},name:'中国巨石',now:43.46,chg:1.85,pos250:48.9,pos60:23.5,ma20:42.39,ma60:47.98,low60:34.06,rb:10.0,r20:3.7,vr:1.02,ind:{macd:-0.271,kdj:52.0,cci:67.8,adx:30.2,wr:31.1,boll:'38.76/46.02',turnover:4.97},kf:'扣非29.08亿 +70.9%',gross:'毛利率42.14%(+9.93pct)·PE38.2·市值1732亿',theme:'玻纤全球龙头·电子布涨价量价齐升·风电/汽车轻量化·海外埃及/美国产能',buy:'41.5-43.24',target:'48.68→55.63',stop:39.11,date:'2026-09-10',status:'回踩区间低吸',note:'现价43.46·+1.85%·MA20(42.39)·60日位置23.5%·低吸41.5-43.24·破39.11止损·信号:S23三日阳'},
+{code:'600343',vg:{st:'bear',e144:24.31,e169:24.52,ma20:18.68,ma55:20.31,upDays:0,d:'2026-09-11'},name:'航天动力',now:20.08,chg:5.24,pos250:18.5,pos60:25.7,ma20:18.7,ma60:20.75,low60:16.83,rb:12.8,r20:2.1,vr:2.93,ind:{macd:-0.22,kdj:55.8,cci:246.6,adx:63.6,wr:20.2,boll:'17.05/20.35',turnover:10.54},kf:'扫描入选·信号3',gross:'年化波动76.0%·位置25.7%',theme:'全市场扫描·S09放量上攻,S14二次探底,S23三日阳',buy:'17.37-18.4',target:'21.78→27.23',stop:14.92,date:'2026-09-11',status:'回踩区间低吸',note:'现价19.45·60日位置25.8%·MA20(18.68)·低吸17.37-18.4·破14.92止损·右侧确认'},
+{code:'688603',vg:{st:'bear',e144:115.03,e169:112.29,ma20:113.01,ma55:119.08,upDays:0,d:'2026-09-11'},name:'天承科技',now:114.9,chg:1.33,pos250:34.9,pos60:26.7,ma20:113.01,ma60:125.78,low60:81.0,rb:11.2,r20:7.0,vr:0.8,ind:{macd:0.962,kdj:46.7,cci:28.3,adx:6.1,wr:39.0,boll:'101.18/124.84',turnover:4.8},kf:'扫描入选·信号3',gross:'年化波动99.8%·位置26.7%',theme:'全市场扫描·S14二次探底,S33回踩好K,S35二次回测',buy:'105.1-109.77',target:'128.12→155.23',stop:75.89,date:'2026-09-11',status:'回踩区间低吸',note:'现价110.88·60日位置23.8%·MA20(113.01)·低吸105.1-109.77·破75.89止损·左侧观察'},
+{code:'000547',vg:{st:'bear',e144:18.58,e169:18.68,ma20:14.43,ma55:15.24,upDays:0,d:'2026-09-11'},name:'航天发展',now:14.99,chg:1.49,pos250:23.1,pos60:28.0,ma20:14.48,ma60:15.64,low60:13.15,rb:11.4,r20:-5.0,vr:1.24,ind:{macd:-0.177,kdj:56.8,cci:136.2,adx:65.9,wr:13.0,boll:'13.11/15.85',turnover:4.79},kf:'扫描入选·信号3',gross:'年化波动59.3%·位置28.0%',theme:'全市场扫描·S09放量上攻,S14二次探底,S23三日阳',buy:'13.42-14.21',target:'20.01→22.05',stop:11.62,date:'2026-09-11',status:'回踩区间低吸',note:'现价14.75·60日位置30.8%·MA20(14.43)·低吸13.42-14.21·破11.62止损·右侧确认'},
+{code:'301216',vg:{st:'bear',e144:20.78,e169:20.78,ma20:18.62,ma55:18.2,upDays:0,d:'2026-09-11'},name:'万凯新材',now:17.9,chg:-7.97,pos250:18.0,pos60:28.2,ma20:18.59,ma60:18.81,low60:15.07,rb:8.8,r20:7.5,vr:1.05,ind:{macd:0.51,kdj:39.8,cci:-62.4,adx:23.9,wr:82.8,boll:'15.71/21.48',turnover:6.97},kf:'扣非3.46亿 +971.5%',gross:'毛利率9.64%(+6.46pct)·现金流5.32亿',theme:'PET瓶片周期反转·农夫山泉/娃哈哈供应商·PEEK/人形机器人·尼日利亚30万吨投产',buy:'17.32-18.19',target:'25.3→27.89',stop:14.09,date:'2026-09-11',status:'回踩区间低吸',note:'现价17.29·60日位置22.4%·MA20(18.62)·低吸17.32-18.19·破14.09止损·左侧观察'},
+{code:'002897',vg:{st:'cross',e144:64.01,e169:63.15,ma20:59.44,ma55:63.95,upDays:2,d:'2026-09-11'},name:'意华股份',now:63.33,chg:0.65,pos250:39.3,pos60:29.3,ma20:59.2,ma60:66.62,low60:49.47,rb:13.8,r20:8.6,vr:1.25,ind:{macd:0.24,kdj:54.5,cci:159.9,adx:44.4,wr:25.2,boll:'54.11/64.28',turnover:10.56},kf:'扫描入选·信号3',gross:'年化波动84.4%·位置29.3%',theme:'全市场扫描·S09放量上攻,S14二次探底,S35二次回测',buy:'55.28-58.55',target:'72.69→90.86',stop:46.91,date:'2026-09-11',status:'回踩区间低吸',note:'现价64.9·60日位置28.4%·MA20(59.44)·低吸55.28-58.55·破46.91止损·右侧确认'},
+{code:'300277',vg:{st:'bear',e144:14.36,e169:14.51,ma20:12.29,ma55:12.62,upDays:0,d:'2026-09-11'},name:'汽轮科技',now:12.51,chg:-2.42,pos250:9.1,pos60:30.1,ma20:12.29,ma60:12.85,low60:11.22,rb:8.4,r20:1.1,vr:0.66,ind:{macd:0.079,kdj:48.1,cci:49.4,adx:45.4,wr:47.7,boll:'11.43/13.15',turnover:2.4},kf:'扣非1.43亿 反转(去年-20万)',gross:'中报净利+64.5%·PE39.7·市值202亿',theme:'杭汽轮B转A·自主50MW燃气轮机国产化(卡脖子)·工业汽轮机全球第一梯队·核电·数据中心',buy:'11.43-12.03',target:'15.66→17.26',stop:10.52,date:'2026-09-11',status:'回踩区间低吸',note:'现价12.15·60日位置22.0%·MA20(12.29)·低吸11.43-12.03·破10.52止损·左侧观察'},
+{code:'600236',vg:{st:'multi',e144:9.65,e169:9.48,ma20:9.94,ma55:10.15,upDays:0,d:'2026-09-10'},name:'桂冠电力',now:9.9,chg:-0.5,pos250:62.9,pos60:32.4,ma20:9.94,ma60:10.07,low60:8.78,rb:3.6,r20:-5.1,vr:0.81,ind:{macd:-0.143,kdj:49.6,cci:32.6,adx:1.3,wr:51.8,boll:'9.59/10.29',turnover:0.15},kf:'扫描入选·信号2',gross:'年化波动55.2%·位置32.4%',theme:'全市场扫描·S03m MACD金叉,S14二次探底',buy:'9.45-9.85',target:'11.09→12.67',stop:8.91,date:'2026-09-10',status:'回踩区间低吸',note:'现价9.9·-0.50%·MA20(9.94)·60日位置32.4%·低吸9.45-9.85·破8.91止损·信号:S03m MACD金叉,S14二次探底'},
+{code:'601208',vg:{st:'multi',e144:43.75,e169:42.14,ma20:47.47,ma55:48.11,upDays:0,d:'2026-09-11'},name:'东材科技',now:48.59,chg:3.01,pos250:50.7,pos60:34.0,ma20:47.47,ma60:50.84,low60:32.5,rb:11.1,r20:3.6,vr:1.16,ind:{macd:0.428,kdj:47.7,cci:16.7,adx:9.9,wr:37.1,boll:'42.99/51.94',turnover:5.85},kf:'扫描入选·信号3',gross:'年化波动91.9%·位置34.0%',theme:'全市场扫描·S14二次探底,S33回踩好K,S35二次回测',buy:'44.15-46.76',target:'53.45→66.81',stop:30.64,date:'2026-09-11',status:'回踩区间低吸',note:'现价47.72·60日位置32.1%·MA20(47.47)·低吸44.15-46.76·破30.64止损·右侧确认'},
+{code:'300803',vg:{st:'bear',e144:93.62,e169:95.02,ma20:83.64,ma55:83.15,upDays:0,d:'2026-09-11'},name:'指南针',now:84.72,chg:0.57,pos250:10.9,pos60:34.1,ma20:83.85,ma60:84.89,low60:73.91,rb:6.9,r20:0.6,vr:0.69,ind:{macd:0.553,kdj:44.4,cci:-1.7,adx:44.2,wr:51.8,boll:'78.79/88.91',turnover:2.48},kf:'扫描入选·信号3',gross:'年化波动55.7%·位置34.1%',theme:'全市场扫描·S14二次探底,S33回踩好K,S35二次回测',buy:'77.79-78.53',target:'105.64→116.42',stop:68.88,date:'2026-09-11',status:'回踩区间低吸',note:'现价79.32·60日位置19.3%·MA20(83.64)·低吸77.79-78.53·破68.88止损·左侧观察'},
+{code:'603115',vg:{st:'multi',e144:70.0,e169:66.48,ma20:79.47,ma55:82.15,upDays:3,d:'2026-09-11'},name:'海星股份',now:86.23,chg:3.26,pos250:60.8,pos60:34.3,ma20:79.33,ma60:85.58,low60:62.95,rb:16.2,r20:11.0,vr:1.13,ind:{macd:0.762,kdj:55.7,cci:170.0,adx:20.7,wr:23.8,boll:'71.77/86.89',turnover:6.0},kf:'扫描入选·信号3',gross:'年化波动95.3%·位置34.3%',theme:'全市场扫描·S14二次探底,S23三日阳,S35二次回测',buy:'73.91-78.28',target:'129.26→142.45',stop:56.14,date:'2026-09-11',status:'回踩区间低吸',note:'现价88.25·60日位置40.0%·MA20(79.47)·低吸73.91-78.28·破56.14止损·右侧确认'},
+{code:'603002',vg:{st:'multi',e144:14.88,e169:14.38,ma20:16.55,ma55:16.61,upDays:2,d:'2026-09-11'},name:'宏昌电子',now:16.81,chg:2.44,pos250:51.7,pos60:35.9,ma20:16.48,ma60:17.4,low60:11.54,rb:11.3,r20:11.1,vr:1.16,ind:{macd:0.156,kdj:52.9,cci:34.5,adx:6.0,wr:46.2,boll:'14.98/17.99',turnover:7.59},kf:'扫描入选·信号3',gross:'年化波动84.7%·位置35.9%',theme:'全市场扫描·S14二次探底,S33回踩好K,S35二次回测',buy:'15.39-16.3',target:'19.56→24.44',stop:10.79,date:'2026-09-11',status:'回踩区间低吸',note:'现价17.46·60日位置37.9%·MA20(16.55)·低吸15.39-16.3·破10.79止损·右侧确认'},
+{code:'002203',vg:{st:'multi',e144:18.14,e169:17.71,ma20:19.32,ma55:19.28,upDays:0,d:'2026-09-11'},name:'海亮股份',now:20.16,chg:1.56,pos250:61.2,pos60:36.8,ma20:19.3,ma60:19.79,low60:16.66,rb:9.7,r20:4.4,vr:1.16,ind:{macd:0.117,kdj:59.3,cci:137.0,adx:25.0,wr:17.0,boll:'18.28/20.31',turnover:1.14},kf:'扫描入选·信号3',gross:'年化波动66.1%·位置36.8%',theme:'全市场扫描·S14二次探底,S23三日阳,S35二次回测',buy:'17.97-19.03',target:'26.33→29.02',stop:15.31,date:'2026-09-11',status:'回踩区间低吸',note:'现价19.65·60日位置32.8%·MA20(19.32)·低吸17.97-19.03·破15.31止损·右侧确认'},
+{code:'603306',vg:{st:'bear',e144:80.88,e169:79.86,ma20:75.3,ma55:76.62,upDays:0,d:'2026-09-11'},name:'华懋科技',now:78.18,chg:1.72,pos250:44.9,pos60:37.9,ma20:75.17,ma60:80.1,low60:54.99,rb:11.5,r20:8.6,vr:1.15,ind:{macd:0.543,kdj:56.8,cci:91.3,adx:11.0,wr:22.5,boll:'70.84/79.49',turnover:3.22},kf:'扫描入选·信号3',gross:'年化波动80.6%·位置37.9%',theme:'全市场扫描·S14二次探底,S23三日阳,S35二次回测',buy:'70.03-74.17',target:'84.74→105.92',stop:52.09,date:'2026-09-11',status:'回踩区间低吸',note:'现价75.66·60日位置32.8%·MA20(75.3)·低吸70.03-74.17·破52.09止损·右侧确认'},
+{code:'688800',vg:{st:'bear',e144:67.87,e169:67.07,ma20:63.59,ma55:65.2,upDays:0,d:'2026-09-11'},name:'瑞可达',now:69.3,chg:2.39,pos250:40.7,pos60:40.2,ma20:63.41,ma60:68.42,low60:47.0,rb:20.5,r20:12.3,vr:1.19,ind:{macd:0.883,kdj:57.5,cci:143.7,adx:35.3,wr:16.3,boll:'57.12/69.7',turnover:5.59},kf:'扫描入选·信号3',gross:'年化波动85.2%·位置40.2%',theme:'全市场扫描·S14二次探底,S23三日阳,S35二次回测',buy:'59.14-62.64',target:'74.85→93.56',stop:44.16,date:'2026-09-11',status:'回踩区间低吸',note:'现价66.83·60日位置34.5%·MA20(63.59)·低吸59.14-62.64·破44.16止损·右侧确认'},
+{code:'601688',vg:{st:'bear',e144:19.5,e169:19.52,ma20:19.09,ma55:19.53,upDays:0,d:'2026-09-11'},name:'华泰证券',now:19.52,chg:1.04,pos250:29.2,pos60:40.7,ma20:19.1,ma60:19.62,low60:18.34,rb:6.4,r20:1.9,vr:0.86,ind:{macd:0.049,kdj:52.1,cci:53.0,adx:52.2,wr:18.5,boll:'18.32/19.88',turnover:0.51},kf:'扫描入选·信号3',gross:'年化波动34.2%·位置40.7%',theme:'全市场扫描·S23三日阳,S33回踩好K,S35二次回测',buy:'18.62-18.74',target:'21.18→23.34',stop:17.34,date:'2026-09-11',status:'回踩区间低吸',note:'现价18.93·60日位置20.2%·MA20(19.09)·低吸18.62-18.74·破17.34止损·左侧观察'},
+{code:'300395',vg:{st:'bear',e144:99.83,e169:99.07,ma20:91.89,ma55:92.61,upDays:0,d:'2026-09-11'},name:'菲利华',now:100.49,chg:2.13,pos250:38.5,pos60:42.9,ma20:91.75,ma60:96.77,low60:70.89,rb:20.7,r20:8.6,vr:1.52,ind:{macd:1.807,kdj:57.5,cci:150.9,adx:37.8,wr:11.4,boll:'83.04/100.46',turnover:6.62},kf:'扫描入选·信号3',gross:'年化波动75.6%·位置42.9%',theme:'全市场扫描·S14二次探底,S23三日阳,S35二次回测',buy:'85.46-90.51',target:'107.62→134.53',stop:66.31,date:'2026-09-11',status:'回踩区间低吸',note:'现价96.09·60日位置35.3%·MA20(91.89)·低吸85.46-90.51·破66.31止损·右侧确认'},
+{code:'600497',vg:{st:'multi',e144:9.43,e169:9.24,ma20:10.14,ma55:10.01,upDays:0,d:'2026-09-11'},name:'驰宏锌锗',now:10.33,chg:1.37,pos250:65.0,pos60:43.0,ma20:10.16,ma60:10.17,low60:8.47,rb:6.8,r20:3.4,vr:1.4,ind:{macd:0.055,kdj:50.9,cci:42.4,adx:16.4,wr:46.1,boll:'9.65/10.67',turnover:2.92},kf:'扫描入选·信号3',gross:'年化波动63.9%·位置43.0%',theme:'全市场扫描·S23三日阳,S33回踩好K,S35二次回测',buy:'9.43-9.71',target:'13.23→14.58',stop:7.82,date:'2026-09-11',status:'回踩区间低吸',note:'现价9.81·60日位置30.0%·MA20(10.14)·低吸9.43-9.71·破7.82止损·右侧确认'},
+{code:'688248',vg:{st:'bear',e144:50.49,e169:50.4,ma20:43.73,ma55:48.22,upDays:0,d:'2026-09-11'},name:'南网科技',now:51.4,chg:5.33,pos250:45.2,pos60:43.0,ma20:43.55,ma60:49.45,low60:38.14,rb:27.3,r20:8.0,vr:1.31,ind:{macd:0.163,kdj:60.8,cci:194.3,adx:71.3,wr:1.4,boll:'36.98/50.12',turnover:1.35},kf:'扫描入选·信号3',gross:'年化波动78.0%·位置43.0%',theme:'全市场扫描·S09放量上攻,S23三日阳,S35二次回测',buy:'40.67-43.07',target:'68.11→75.06',stop:35.91,date:'2026-09-11',status:'回踩区间低吸',note:'现价50.3·60日位置39.4%·MA20(43.73)·低吸40.67-43.07·破35.91止损·右侧确认'},
+{code:'688035',vg:{st:'cross',e144:68.7,e169:67.6,ma20:68.25,ma55:70.02,upDays:0,d:'2026-09-11'},name:'德邦科技',now:74.95,chg:4.24,pos250:52.6,pos60:44.1,ma20:67.99,ma60:72.76,low60:52.54,rb:17.7,r20:21.0,vr:1.35,ind:{macd:1.091,kdj:58.3,cci:179.0,adx:45.8,wr:11.7,boll:'61.38/74.6',turnover:6.53},kf:'扫描入选·信号3',gross:'年化波动83.9%·位置44.1%',theme:'全市场扫描·S14二次探底,S23三日阳,S35二次回测',buy:'63.47-67.23',target:'79.4→99.25',stop:49.4,date:'2026-09-11',status:'回踩区间低吸',note:'现价70.89·60日位置34.2%·MA20(68.25)·低吸63.47-67.23·破49.4止损·右侧确认'},
+{code:'301511',vg:{st:'multi',e144:84.81,e169:81.04,ma20:93.19,ma55:96.78,upDays:0,d:'2026-09-11'},name:'德福科技',now:108.68,chg:2.82,pos250:56.9,pos60:45.1,ma20:92.61,ma60:102.21,low60:63.23,rb:35.4,r20:21.0,vr:0.99,ind:{macd:3.073,kdj:57.9,cci:156.0,adx:43.0,wr:11.5,boll:'76.56/108.66',turnover:9.37},kf:'扫描入选·信号3',gross:'年化波动120.0%·位置45.1%',theme:'全市场扫描·S14二次探底,S23三日阳,S35二次回测',buy:'86.67-91.79',target:'119.17→148.96',stop:59.18,date:'2026-09-11',status:'回踩区间低吸',note:'现价106.4·60日位置40.4%·MA20(93.19)·低吸86.67-91.79·破59.18止损·右侧确认·高波动降级'},
+{code:'300739',vg:{st:'cross',e144:24.84,e169:24.52,ma20:23.59,ma55:24.27,upDays:3,d:'2026-09-11'},name:'明阳电路',now:26.93,chg:8.68,pos250:51.8,pos60:46.9,ma20:23.33,ma60:25.07,low60:18.92,rb:22.0,r20:18.4,vr:2.28,ind:{macd:0.43,kdj:57.9,cci:215.3,adx:58.0,wr:13.0,boll:'20.95/25.7',turnover:11.41},kf:'扫描入选·信号4',gross:'年化波动80.6%·位置46.9%',theme:'全市场扫描·S09放量上攻,S14二次探底,S23三日阳',buy:'21.94-23.24',target:'35.58→39.21',stop:16.78,date:'2026-09-11',status:'中位关注',note:'现价28.63·60日位置58.8%·MA20(23.59)·低吸21.94-23.24·破16.78止损·右侧确认'},
+{code:'000601',vg:{st:'bear',e144:6.4,e169:6.34,ma20:6.21,ma55:6.38,upDays:0,d:'2026-09-11'},name:'韶能股份',now:6.45,chg:2.06,pos250:39.1,pos60:48.5,ma20:6.21,ma60:6.37,low60:5.8,rb:7.0,r20:-4.3,vr:3.13,ind:{macd:-0.044,kdj:56.9,cci:244.8,adx:55.2,wr:16.7,boll:'5.99/6.43',turnover:8.16},kf:'扫描入选·信号3',gross:'年化波动63.2%·位置48.5%',theme:'全市场扫描·S09放量上攻,S14二次探底,S23三日阳',buy:'5.81-6.12',target:'7.07→7.79',stop:5.42,date:'2026-09-11',status:'回踩区间低吸',note:'现价6.39·60日位置45.7%·MA20(6.21)·低吸5.81-6.12·破5.42止损·右侧确认'},
+{code:'002828',vg:{st:'bear',e144:11.69,e169:11.67,ma20:12.13,ma55:11.83,upDays:0,d:'2026-09-11'},name:'贝肯能源',now:11.8,chg:0.43,pos250:39.0,pos60:63.5,ma20:12.17,ma60:11.62,low60:8.88,rb:32.9,r20:0.2,vr:0.01,ind:{macd:-0.159,kdj:-3.2,cci:-164.9,adx:0,wr:100.0,boll:'11.68/12.66',turnover:0.12},kf:'油服·新疆克拉玛依+伊拉克钻井',gross:'年化波动63%·位置63.5%',theme:'油价暴涨(WTI+6.7%)直接受益·CCI/WR超卖·回踩MA60企稳',buy:'11.28-11.84',target:'13.92→15.34',stop:8.02,date:'2026-09-11',status:'回踩区间低吸',note:'现价11.09·60日位置46.0%·MA20(12.13)·低吸11.28-11.84·破8.02止损·左侧观察'},
+{code:'600764',vg:{st:'bear',e144:21.26,e169:21.92,ma20:18.23,ma55:18.11,upDays:0,d:'2026-09-11'},name:'中国海防',now:19.51,chg:-1.41,pos250:14.0,pos60:89.7,ma20:18.22,ma60:18.12,low60:17.08,rb:14.2,r20:8.4,vr:0.01,ind:{macd:0.385,kdj:92.3,cci:165.7,adx:0,wr:0.0,boll:'16.82/19.62',turnover:0.02},kf:'军工电子·中国船舶集团·声呐水声防务',gross:'年化波动32%·位置89.7%',theme:'军工自主可控·250日位置14%长周期低位·KDJ/WR超买需回踩',buy:'17.17-17.96',target:'21.51→21.81',stop:15.99,date:'2026-09-11',status:'中位关注',note:'现价19.55·60日位置81.0%·MA20(18.23)·低吸17.17-17.96·破15.99止损·右侧确认'}
+];;
+;
+// 短线池（形态+信息面快进快出，单票≤5%，N字/假阴/一阳/主升多战法精选，2026-09-03核验）
+const SHORT_POOL = [
+{code:'300292',vg:{st:'bear',e144:4.77,e169:4.8,ma20:4.31,ma55:4.32,upDays:1,d:'2026-09-11'},name:'吴通控股',now:4.59,chg:5.03,turn:12.67,vr:3.63,score:86,tag:'扫描入选·共振3',buy:'4.41-4.52',target:'5.14',stop:'4.27',note:'回踩4.41-4.52低吸·破4.27止损·目标5.14·60日位置31.9%·扫描共振3条',risk:'高'},
+{code:'002446',vg:{st:'bear',e144:9.34,e169:9.36,ma20:8.42,ma55:8.69,upDays:1,d:'2026-09-11'},name:'盛路通信',now:8.3,chg:1.84,turn:4.54,vr:1.67,score:86,tag:'扫描入选·共振3',buy:'7.97-8.18',target:'9.3',stop:'7.72',note:'回踩7.97-8.18低吸·破7.72止损·目标9.3·60日位置28.2%·扫描共振3条',risk:'高'},
+{code:'301220',vg:{st:'bear',e144:33.09,e169:33.85,ma20:27.6,ma55:28.29,upDays:1,d:'2026-09-11'},name:'亚香股份',now:27.78,chg:4.24,turn:4.51,vr:1.82,score:88,tag:'扫描入选·共振4',buy:'26.67-27.36',target:'31.11',stop:'25.84',note:'回踩26.67-27.36低吸·破25.84止损·目标31.11·60日位置26.8%·扫描共振4条',risk:'高'},
+{code:'000537',vg:{st:'bear',e144:8.48,e169:8.54,ma20:7.68,ma55:7.64,upDays:0,d:'2026-09-11'},name:'绿发电力',now:8.03,chg:4.15,turn:2.29,vr:3.01,score:92,tag:'S03m MACD金叉,S09放量上攻',buy:'7.49-7.68',target:'8.74',stop:'7.25',note:'回踩7.49-7.68低吸·破7.25止损·目标8.74·60日位置45.0%',risk:'高'},
+{code:'002134',vg:{st:'bear',e144:23.86,e169:23.84,ma20:22.06,ma55:23.12,upDays:2,d:'2026-09-10'},name:'天津普林',now:22.4,chg:1.27,turn:4.01,vr:0.97,score:70,tag:'假阴突破',buy:'21.39-22.29',target:'25.76',stop:'20.16',note:'假阴突破·回踩21.39-22.29低吸·破20.16止损·目标25.76·60日位置34.8%',risk:'高'},
+{code:'600101',vg:{st:'bear',e144:8.82,e169:8.92,ma20:7.93,ma55:8.06,upDays:0,d:'2026-09-11'},name:'明星电力',now:8.49,chg:6.79,turn:10.11,vr:7.13,score:84,tag:'S09放量上攻,S14二次探底',buy:'7.87-8.08',target:'9.18',stop:'7.63',note:'回踩7.87-8.08低吸·破7.63止损·目标9.18·60日位置45.9%',risk:'高'},
+{code:'600396',vg:{st:'multi',e144:12.43,e169:11.77,ma20:14.46,ma55:14.64,upDays:0,d:'2026-09-11'},name:'华电辽能',now:15.51,chg:5.15,turn:18.54,vr:2.16,score:84,tag:'S03m MACD金叉,S14二次探底',buy:'14.02-14.38',target:'16.35',stop:'13.58',note:'回踩14.02-14.38低吸·破13.58止损·目标16.35·60日位置48.9%',risk:'高'},
+{code:'600726',vg:{st:'bear',e144:5.7,e169:5.52,ma20:5.6,ma55:5.98,upDays:0,d:'2026-09-11'},name:'华电能源',now:5.82,chg:5.82,turn:3.17,vr:3.32,score:76,tag:'S14二次探底,S23三日阳',buy:'5.26-5.4',target:'6.14',stop:'5.1',note:'回踩5.26-5.4低吸·破5.1止损·目标6.14·60日位置7.6%',risk:'高'},
+{code:'688135',vg:{st:'cross',e144:30.93,e169:30.83,ma20:28.44,ma55:29.29,upDays:5,d:'2026-09-11'},name:'利扬芯片',now:36.5,chg:5.64,turn:11.62,vr:1.75,score:76,tag:'S09放量上攻,S23三日阳',buy:'35.59-36.51',target:'41.52',stop:'34.48',note:'回踩35.59-36.51低吸·破34.48止损·目标41.52·60日位置60.1%',risk:'高'},
+{code:'600113',vg:{st:'bear',e144:37.66,e169:38.53,ma20:30.95,ma55:30.88,upDays:0,d:'2026-09-11'},name:'浙江东日',now:34.16,chg:5.63,turn:3.43,vr:1.88,score:76,tag:'S09放量上攻,S23三日阳',buy:'30.17-30.96',target:'35.2',stop:'29.23',note:'回踩30.17-30.96低吸·破29.23止损·目标35.2·60日位置41.1%',risk:'高'},
+{code:'603083',vg:{st:'multi',e144:166.24,e169:160.81,ma20:191.39,ma55:184.21,upDays:1,d:'2026-09-10'},name:'XD剑桥科',now:234.43,chg:7.05,turn:11.77,vr:1.12,score:84,tag:'假阴突破',buy:'223.88-229.74',target:'269.59',stop:'199.27',note:'假阴突破·回踩223.88-229.74低吸·破199.27止损·目标269.59·60日位置79.0%',risk:'高'},
+{code:'001896',vg:{st:'bear',e144:13.36,e169:13.0,ma20:11.99,ma55:13.42,upDays:0,d:'2026-09-11'},name:'豫能控股',now:12.43,chg:5.7,turn:9.74,vr:4.24,score:68,tag:'S09放量上攻',buy:'11.34-11.63',target:'13.23',stop:'10.98',note:'回踩11.34-11.63低吸·破10.98止损·目标13.23·60日位置4.1%',risk:'高'},
+{code:'300049',vg:{st:'bear',e144:48.58,e169:49.36,ma20:42.44,ma55:43.09,upDays:0,d:'2026-09-11'},name:'福瑞医科',now:45.31,chg:4.4,turn:3.99,vr:1.06,score:68,tag:'S09放量上攻',buy:'42.73-43.84',target:'49.85',stop:'41.39',note:'回踩42.73-43.84低吸·破41.39止损·目标49.85·60日位置65.5%',risk:'高'},
+{code:'002782',vg:{st:'bear',e144:18.73,e169:18.84,ma20:15.41,ma55:15.95,upDays:0,d:'2026-09-10'},name:'可立克',now:15.1,chg:-2.01,turn:1.14,vr:0.65,score:74,tag:'突破',buy:'14.42-15.02',target:'17.36',stop:'13.59',note:'突破·回踩14.42-15.02低吸·破13.59止损·目标17.36·60日位置16.0%',risk:'高'},
+{code:'603619',vg:{st:'bear',e144:24.69,e169:24.79,ma20:23.32,ma55:21.49,upDays:0,d:'2026-09-10'},name:'中曼石油',now:24.14,chg:-2.46,turn:10.09,vr:1.36,score:68,tag:'S3均线多头',buy:'23.05-23.79',target:'27.76',stop:'21.73',note:'S3均线多头·回踩23.05-23.79低吸·破21.73止损·目标27.76·60日位置89.4%',risk:'高'},
+{code:'688668',vg:{st:'multi',e144:241.32,e169:232.44,ma20:259.28,ma55:268.26,upDays:0,d:'2026-09-10'},name:'鼎通科技',now:256.55,chg:-2.64,turn:2.7,vr:0.79,score:82,tag:'假阴突破',buy:'245.01-255.27',target:'295.03',stop:'230.9',note:'假阴突破·回踩245.01-255.27低吸·破230.9止损·目标295.03·60日位置32.4%',risk:'高'},
+{code:'300696',vg:{st:'bear',e144:26.07,e169:26.43,ma20:21.02,ma55:21.6,upDays:0,d:'2026-09-10'},name:'爱乐达',now:20.95,chg:-1.64,turn:1.59,vr:0.6,score:68,tag:'待假阴',buy:'20.01-20.85',target:'24.09',stop:'18.86',note:'待假阴·回踩20.01-20.85低吸·破18.86止损·目标24.09·60日位置18.3%',risk:'高'},
+{code:'002733',vg:{st:'bear',e144:23.05,e169:23.07,ma20:18.58,ma55:20.47,upDays:0,d:'2026-09-10'},name:'雄韬股份',now:17.8,chg:-2.04,turn:2.05,vr:0.56,score:64,tag:'待假阴',buy:'17.17-17.71',target:'20.47',stop:'16.02',note:'待假阴·回踩17.17-17.71低吸·破16.02止损·目标20.47·60日位置5.2%',risk:'高'},
+{code:'002993',vg:{st:'bear',e144:47.02,e169:47.12,ma20:38.09,ma55:43.89,upDays:0,d:'2026-09-10'},name:'奥海科技',now:36.41,chg:-2.07,turn:1.51,vr:0.62,score:66,tag:'待假阴',buy:'34.77-36.23',target:'41.87',stop:'32.77',note:'待假阴·回踩34.77-36.23低吸·破32.77止损·目标41.87·60日位置8.2%',risk:'高'},
+{code:'688209',vg:{st:'multi',e144:24.11,e169:23.81,ma20:27.32,ma55:25.15,upDays:0,d:'2026-09-10'},name:'英集芯',now:32.88,chg:-3.07,turn:5.33,vr:0.66,score:86,tag:'一阳穿三线',buy:'31.4-32.22',target:'37.81',stop:'27.95',note:'一阳穿三线·回踩31.4-32.22低吸·破27.95止损·目标37.81·60日位置89.0%',risk:'高'},
+{code:'000962',vg:{st:'bear',e144:51.64,e169:50.12,ma20:53.91,ma55:57.38,upDays:0,d:'2026-09-10'},name:'东方钽业',now:51.14,chg:-3.09,turn:2.42,vr:0.62,score:68,tag:'强趋势',buy:'48.84-50.88',target:'58.81',stop:'46.03',note:'强趋势·回踩48.84-50.88低吸·破46.03止损·目标58.81·60日位置19.1%',risk:'高'},
+{code:'605088',vg:{st:'bear',e144:27.88,e169:28.65,ma20:21.0,ma55:22.8,upDays:1,d:'2026-09-11'},name:'冠盛股份',now:20.44,chg:-4.66,turn:4.74,vr:0.65,score:83,tag:'一阳穿三线',buy:'21.58-22.14',target:'25.18',stop:'20.91',note:'回踩21.58-22.14低吸·破20.91止损·目标25.18·60日位置25.5%',risk:'高'}
+];;
+;
+// N字战法候选（涨停回踩突破，2026-09-03 ifind 核验）
+const NZI_POOL = [
+{code:'603083',vg:{st:'multi',e144:166.24,e169:160.81,ma20:191.39,ma55:184.21,upDays:1,d:'2026-09-10'},name:'XD剑桥科',now:234.43,chg:7.05,vol:1.1,score:84,buy:'223.88-229.74',target:'277',note:'CPO·跳空放量突破前高·巨量假阴洗盘·关注缩量阳包阴',tag:'假阴突破'},
+{code:'002821',vg:{st:'multi',e144:140.38,e169:136.8,ma20:169.28,ma55:165.77,upDays:0,d:'2026-09-10'},name:'凯莱英',now:170.36,chg:-1.55,vol:0.7,score:66,buy:'162.69-169.51',target:'201',note:'ADX25·CXO医药回暖·趋势刚确认',tag:'强趋势'},
+{code:'000962',vg:{st:'bear',e144:51.64,e169:50.12,ma20:53.91,ma55:57.38,upDays:0,d:'2026-09-10'},name:'东方钽业',now:51.14,chg:-3.09,vol:0.6,score:68,buy:'48.84-50.88',target:'60',note:'ADX26·稀有金属·趋势确认·回踩介入',tag:'强趋势'},
+{code:'000951',vg:{st:'multi',e144:20.99,e169:20.78,ma20:21.4,ma55:21.53,upDays:0,d:'2026-09-10'},name:'中国重汽',now:21.78,chg:-3.07,vol:1.5,score:72,buy:'20.8-21.67',target:'26',note:'重卡·涨停后跳空·假阴洗盘·缩量回踩企稳',tag:'假阴突破'},
+{code:'688668',vg:{st:'multi',e144:241.32,e169:232.44,ma20:259.28,ma55:268.26,upDays:0,d:'2026-09-10'},name:'鼎通科技',now:256.55,chg:-2.64,vol:0.8,score:82,buy:'245.01-255.27',target:'303',note:'液冷/CPO·放量突破平台·假阴洗盘后主升·量能2.1倍',tag:'假阴突破'},
+{code:'002993',vg:{st:'bear',e144:47.02,e169:47.12,ma20:38.09,ma55:43.89,upDays:0,d:'2026-09-10'},name:'奥海科技',now:36.41,chg:-2.07,vol:0.6,score:66,buy:'34.77-36.23',target:'43',note:'AI眼镜·突破前夜·量能蓄势·假阴战法候选',tag:'待假阴'},
+{code:'002733',vg:{st:'bear',e144:23.05,e169:23.07,ma20:18.58,ma55:20.47,upDays:0,d:'2026-09-10'},name:'雄韬股份',now:17.8,chg:-2.04,vol:0.6,score:64,buy:'17.17-17.71',target:'21',note:'固态电池·站上20日线·放量突破前关注假阴形态',tag:'待假阴'},
+{code:'002782',vg:{st:'bear',e144:18.73,e169:18.84,ma20:15.41,ma55:15.95,upDays:0,d:'2026-09-10'},name:'可立克',now:15.1,chg:-2.01,vol:0.7,score:74,buy:'14.42-15.02',target:'18',note:'汽车电子+储能·放量突破20日线·高换手小盘适合此战法',tag:'突破'},
+{code:'300696',vg:{st:'bear',e144:26.07,e169:26.43,ma20:21.02,ma55:21.6,upDays:0,d:'2026-09-10'},name:'爱乐达',now:20.95,chg:-1.64,vol:0.6,score:68,buy:'20.01-20.85',target:'25',note:'低空+军工·放量上攻·中小盘高换手·观察假阴洗盘',tag:'待假阴'},
+{code:'002134',vg:{st:'bear',e144:23.86,e169:23.84,ma20:22.06,ma55:23.12,upDays:2,d:'2026-09-10'},name:'天津普林',now:22.4,chg:1.27,vol:1.0,score:70,buy:'21.39-22.29',target:'26',note:'PCB·放量突破前高后假阴回踩·高换手中小盘适用',tag:'假阴突破'}
+];;;
+// CCI主升浪池（CCI突破+100站稳+放量加速，2026-09-03 ifind核验）
+const CCI_POOL = [
+{code:'688209',vg:{st:'multi',e144:24.11,e169:23.81,ma20:27.32,ma55:25.15,upDays:0,d:'2026-09-10'},name:'英集芯',now:32.88,chg:-3.07,cci:70,score:86,buy:'31.4-32.22',target:'39',note:'大阳+10.75%·量能3.2倍·上穿5/10/20粘合均线·启动确认',tag:'一阳穿三线'},
+{code:'601886',vg:{st:'multi',e144:9.66,e169:9.46,ma20:13.12,ma55:10.13,upDays:0,d:'2026-09-10'},name:'江河集团',now:12.96,chg:-3.28,cci:-106,score:78,buy:'12.38-12.9',target:'15',note:'CCI152·近20日+60%·建筑装饰·放量主升',tag:'主升'},
+{code:'601579',vg:{st:'multi',e144:17.84,e169:17.92,ma20:20.73,ma55:17.02,upDays:0,d:'2026-09-10'},name:'会稽山',now:24.24,chg:-4.19,cci:129,score:75,buy:'23.15-23.76',target:'29',note:'CCI135·近20日+42%·黄酒+消费回暖·加速段',tag:'主升'},
+{code:'688668',vg:{st:'multi',e144:241.32,e169:232.44,ma20:259.28,ma55:268.26,upDays:0,d:'2026-09-10'},name:'鼎通科技',now:256.55,chg:-2.64,cci:9,score:82,buy:'245.01-255.27',target:'303',note:'液冷/CPO·放量突破平台·假阴洗盘后主升·量能2.1倍',tag:'假阴突破'},
+{code:'603083',vg:{st:'multi',e144:166.24,e169:160.81,ma20:191.39,ma55:184.21,upDays:1,d:'2026-09-10'},name:'XD剑桥科',now:234.43,chg:7.05,cci:163,score:84,buy:'223.88-229.74',target:'277',note:'CPO·跳空放量突破前高·巨量假阴洗盘·关注缩量阳包阴',tag:'假阴突破'},
+{code:'002993',vg:{st:'bear',e144:47.02,e169:47.12,ma20:38.09,ma55:43.89,upDays:0,d:'2026-09-10'},name:'奥海科技',now:36.41,chg:-2.07,cci:-169,score:66,buy:'34.77-36.23',target:'43',note:'AI眼镜·突破前夜·量能蓄势·假阴战法候选',tag:'待假阴'},
+{code:'002733',vg:{st:'bear',e144:23.05,e169:23.07,ma20:18.58,ma55:20.47,upDays:0,d:'2026-09-10'},name:'雄韬股份',now:17.8,chg:-2.04,cci:-251,score:64,buy:'17.17-17.71',target:'21',note:'固态电池·站上20日线·放量突破前关注假阴形态',tag:'待假阴'},
+{code:'002134',vg:{st:'bear',e144:23.86,e169:23.84,ma20:22.06,ma55:23.12,upDays:2,d:'2026-09-10'},name:'天津普林',now:22.4,chg:1.27,cci:24,score:70,buy:'21.39-22.29',target:'26',note:'PCB·放量突破前高后假阴回踩·高换手中小盘适用',tag:'假阴突破'},
+{code:'300696',vg:{st:'bear',e144:26.07,e169:26.43,ma20:21.02,ma55:21.6,upDays:0,d:'2026-09-10'},name:'爱乐达',now:20.95,chg:-1.64,cci:9,score:68,buy:'20.01-20.85',target:'25',note:'低空+军工·放量上攻·中小盘高换手·观察假阴洗盘',tag:'待假阴'},
+{code:'000962',vg:{st:'bear',e144:51.64,e169:50.12,ma20:53.91,ma55:57.38,upDays:0,d:'2026-09-10'},name:'东方钽业',now:51.14,chg:-3.09,cci:-100,score:68,buy:'48.84-50.88',target:'60',note:'ADX26·稀有金属·趋势确认·回踩介入',tag:'强趋势'}
+];;;
+// ADX趋势池（ADX>25强趋势确认，ADX<20震荡过滤，2026-09-03核验）
+const ADX_POOL = [
+{code:'688668',vg:{st:'multi',e144:241.32,e169:232.44,ma20:259.28,ma55:268.26,upDays:0,d:'2026-09-10'},name:'鼎通科技',now:256.55,chg:-2.64,adx:4,score:82,buy:'245.01-255.27',target:'303',note:'液冷/CPO·放量突破平台·假阴洗盘后主升·量能2.1倍',tag:'假阴突破'},
+{code:'601872',vg:{st:'multi',e144:16.09,e169:15.59,ma20:18.82,ma55:17.24,upDays:0,d:'2026-09-10'},name:'招商轮船',now:20.58,chg:-1.95,adx:21,score:76,buy:'19.65-20.17',target:'24',note:'ADX30·油运景气·中报净利+227%·趋势明确',tag:'强趋势'},
+{code:'603083',vg:{st:'multi',e144:166.24,e169:160.81,ma20:191.39,ma55:184.21,upDays:1,d:'2026-09-10'},name:'XD剑桥科',now:234.43,chg:7.05,adx:52,score:84,buy:'223.88-229.74',target:'277',note:'CPO·跳空放量突破前高·巨量假阴洗盘·关注缩量阳包阴',tag:'假阴突破'},
+{code:'002134',vg:{st:'bear',e144:23.86,e169:23.84,ma20:22.06,ma55:23.12,upDays:2,d:'2026-09-10'},name:'天津普林',now:22.4,chg:1.27,adx:18,score:70,buy:'21.39-22.29',target:'26',note:'PCB·放量突破前高后假阴回踩·高换手中小盘适用',tag:'假阴突破'},
+{code:'688209',vg:{st:'multi',e144:24.11,e169:23.81,ma20:27.32,ma55:25.15,upDays:0,d:'2026-09-10'},name:'英集芯',now:32.88,chg:-3.07,adx:77,score:86,buy:'31.4-32.22',target:'39',note:'大阳+10.75%·量能3.2倍·上穿5/10/20粘合均线·启动确认',tag:'一阳穿三线'},
+{code:'000962',vg:{st:'bear',e144:51.64,e169:50.12,ma20:53.91,ma55:57.38,upDays:0,d:'2026-09-10'},name:'东方钽业',now:51.14,chg:-3.09,adx:10,score:68,buy:'48.84-50.88',target:'60',note:'ADX26·稀有金属·趋势确认·回踩介入',tag:'强趋势'},
+{code:'002821',vg:{st:'multi',e144:140.38,e169:136.8,ma20:169.28,ma55:165.77,upDays:0,d:'2026-09-10'},name:'凯莱英',now:170.36,chg:-1.55,adx:13,score:66,buy:'162.69-169.51',target:'201',note:'ADX25·CXO医药回暖·趋势刚确认',tag:'强趋势'},
+{code:'002993',vg:{st:'bear',e144:47.02,e169:47.12,ma20:38.09,ma55:43.89,upDays:0,d:'2026-09-10'},name:'奥海科技',now:36.41,chg:-2.07,adx:13,score:66,buy:'34.77-36.23',target:'43',note:'AI眼镜·突破前夜·量能蓄势·假阴战法候选',tag:'待假阴'},
+{code:'002733',vg:{st:'bear',e144:23.05,e169:23.07,ma20:18.58,ma55:20.47,upDays:0,d:'2026-09-10'},name:'雄韬股份',now:17.8,chg:-2.04,adx:23,score:64,buy:'17.17-17.71',target:'21',note:'固态电池·站上20日线·放量突破前关注假阴形态',tag:'待假阴'},
+{code:'300696',vg:{st:'bear',e144:26.07,e169:26.43,ma20:21.02,ma55:21.6,upDays:0,d:'2026-09-10'},name:'爱乐达',now:20.95,chg:-1.64,adx:14,score:68,buy:'20.01-20.85',target:'25',note:'低空+军工·放量上攻·中小盘高换手·观察假阴洗盘',tag:'待假阴'}
+];;;
+
+// 跳空巨量假阴突破池（机构洗盘战法：跳空高开破压力位+巨量阴线+缩量阳包阴确认，2026-09-03学习）
+const FAKEYIN_POOL = [
+{code:'603083',vg:{st:'multi',e144:166.24,e169:160.81,ma20:191.39,ma55:184.21,upDays:1,d:'2026-09-10'},name:'XD剑桥科',now:234.43,chg:7.05,vol:1.1,score:84,buy:'223.88-229.74',target:'277',note:'CPO·跳空放量突破前高·巨量假阴洗盘·关注缩量阳包阴',tag:'假阴突破'},
+{code:'688668',vg:{st:'multi',e144:241.32,e169:232.44,ma20:259.28,ma55:268.26,upDays:0,d:'2026-09-10'},name:'鼎通科技',now:256.55,chg:-2.64,vol:0.8,score:82,buy:'245.01-255.27',target:'303',note:'液冷/CPO·放量突破平台·假阴洗盘后主升·量能2.1倍',tag:'假阴突破'},
+{code:'688209',vg:{st:'multi',e144:24.11,e169:23.81,ma20:27.32,ma55:25.15,upDays:0,d:'2026-09-10'},name:'英集芯',now:32.88,chg:-3.07,vol:0.7,score:86,buy:'31.4-32.22',target:'39',note:'大阳+10.75%·量能3.2倍·上穿5/10/20粘合均线·启动确认',tag:'一阳穿三线'},
+{code:'002782',vg:{st:'bear',e144:18.73,e169:18.84,ma20:15.41,ma55:15.95,upDays:0,d:'2026-09-10'},name:'可立克',now:15.1,chg:-2.01,vol:0.7,score:74,buy:'14.42-15.02',target:'18',note:'汽车电子+储能·放量突破20日线·高换手小盘适合此战法',tag:'突破'},
+{code:'000951',vg:{st:'multi',e144:20.99,e169:20.78,ma20:21.4,ma55:21.53,upDays:0,d:'2026-09-10'},name:'中国重汽',now:21.78,chg:-3.07,vol:1.5,score:72,buy:'20.8-21.67',target:'26',note:'重卡·涨停后跳空·假阴洗盘·缩量回踩企稳',tag:'假阴突破'},
+{code:'002134',vg:{st:'bear',e144:23.86,e169:23.84,ma20:22.06,ma55:23.12,upDays:2,d:'2026-09-10'},name:'天津普林',now:22.4,chg:1.27,vol:1.0,score:70,buy:'21.39-22.29',target:'26',note:'PCB·放量突破前高后假阴回踩·高换手中小盘适用',tag:'假阴突破'},
+{code:'300696',vg:{st:'bear',e144:26.07,e169:26.43,ma20:21.02,ma55:21.6,upDays:0,d:'2026-09-10'},name:'爱乐达',now:20.95,chg:-1.64,vol:0.6,score:68,buy:'20.01-20.85',target:'25',note:'低空+军工·放量上攻·中小盘高换手·观察假阴洗盘',tag:'待假阴'},
+{code:'002993',vg:{st:'bear',e144:47.02,e169:47.12,ma20:38.09,ma55:43.89,upDays:0,d:'2026-09-10'},name:'奥海科技',now:36.41,chg:-2.07,vol:0.6,score:66,buy:'34.77-36.23',target:'43',note:'AI眼镜·突破前夜·量能蓄势·假阴战法候选',tag:'待假阴'},
+{code:'002733',vg:{st:'bear',e144:23.05,e169:23.07,ma20:18.58,ma55:20.47,upDays:0,d:'2026-09-10'},name:'雄韬股份',now:17.8,chg:-2.04,vol:0.6,score:64,buy:'17.17-17.71',target:'21',note:'固态电池·站上20日线·放量突破前关注假阴形态',tag:'待假阴'},
+{code:'002897',vg:{st:'bear',e144:64.03,e169:63.19,ma20:59.2,ma55:64.3,upDays:1,d:'2026-09-10'},name:'意华股份',now:63.33,chg:0.65,vol:1.2,score:62,buy:'60.48-62.06',target:'75',note:'连接器·深调后放量反弹·高换手·假阴洗盘候选',tag:'待假阴'}
+];;;
+// 一阳穿三线启动池（三倍量+大阳线上穿粘合均线，2026-09-03学习）
+const ONELINE_POOL = [
+{code:'688209',vg:{st:'multi',e144:24.11,e169:23.81,ma20:27.32,ma55:25.15,upDays:0,d:'2026-09-10'},name:'英集芯',now:32.88,chg:-3.07,vol:0.7,score:86,buy:'31.4-32.22',target:'39',note:'大阳+10.75%·量能3.2倍·上穿5/10/20粘合均线·启动确认',tag:'一阳穿三线'},
+{code:'605088',vg:{st:'bear',e144:28.08,e169:28.95,ma20:20.93,ma55:22.9,upDays:0,d:'2026-09-10'},name:'冠盛股份',now:20.44,chg:-4.66,vol:0.7,score:83,buy:'19.7-20.34',target:'24',note:'涨停大阳·量能2.7倍·均线粘合后突破·汽配高景气',tag:'一阳穿三线'},
+{code:'600596',vg:{st:'neutral',e144:11.89,e169:11.86,ma20:11.07,ma55:11.52,upDays:0,d:'2026-09-10'},name:'新安股份',now:12.02,chg:-4.75,vol:1.1,score:75,buy:'11.48-11.78',target:'14',note:'中阳上穿粘合均线·量能1.6倍·周期回暖·启动',tag:'一阳穿三线'},
+{code:'300224',vg:{st:'bear',e144:12.98,e169:13.23,ma20:11.48,ma55:11.7,upDays:0,d:'2026-09-10'},name:'正海磁材',now:11.72,chg:-0.93,vol:0.5,score:73,buy:'11.19-11.66',target:'14',note:'稀土永磁·中阳突破粘合均线·量能1.9倍·机器人电机',tag:'一阳穿三线'},
+{code:'001208',vg:{st:'bear',e144:15.97,e169:16.07,ma20:14.25,ma55:14.2,upDays:0,d:'2026-09-10'},name:'华菱线缆',now:14.36,chg:-1.37,vol:0.5,score:72,buy:'13.71-14.29',target:'17',note:'特种电缆·大阳上穿均线·量能2.7倍·军工+数据中心',tag:'一阳穿三线'},
+{code:'300331',vg:{st:'bear',e144:48.72,e169:47.75,ma20:48.61,ma55:50.55,upDays:0,d:'2026-09-10'},name:'苏大维格',now:46.3,chg:-1.84,vol:0.6,score:70,buy:'44.22-46.07',target:'55',note:'光刻机·中阳突破·量能蓄势·均线粘合启动',tag:'一阳穿三线'},
+{code:'603063',vg:{st:'bear',e144:37.63,e169:37.66,ma20:31.95,ma55:34.79,upDays:0,d:'2026-09-10'},name:'禾望电气',now:30.65,chg:-1.51,vol:0.5,score:76,buy:'29.27-30.5',target:'36',note:'储能逆变器·大阳+6.3%·放量上穿20日线·启动',tag:'一阳穿三线'},
+{code:'003021',vg:{st:'bear',e144:91.18,e169:93.31,ma20:73.03,ma55:78.75,upDays:0,d:'2026-09-10'},name:'兆威机电',now:69.12,chg:-1.82,vol:0.5,score:69,buy:'67.48-68.77',target:'82',note:'人形机器人·均线粘合后放量突破·启动信号',tag:'一阳穿三线'},
+{code:'002965',vg:{st:'bear',e144:36.22,e169:36.44,ma20:31.06,ma55:38.04,upDays:0,d:'2026-09-10'},name:'祥鑫科技',now:28.21,chg:-3.26,vol:0.8,score:67,buy:'27.77-28.07',target:'33',note:'汽车结构件·放量上穿粘合均线·回踩确认',tag:'一阳穿三线'},
+{code:'300435',vg:{st:'bear',e144:20.34,e169:20.54,ma20:17.13,ma55:18.35,upDays:0,d:'2026-09-10'},name:'中泰股份',now:17.09,chg:-0.29,vol:0.7,score:63,buy:'16.32-17.0',target:'20',note:'深冷装备·均线粘合·待放量大阳突破',tag:'待突破'}
+];;;
+
+function allPoolStocks(){
+  var arr=[].concat(FAREAST_POOL||[],SWING_POOL||[],SHORT_POOL||[],NZI_POOL||[],ADX_POOL||[],CCI_POOL||[],FAKEYIN_POOL||[],ONELINE_POOL||[],DIVIDEND_POOL||[],SMALLCAP_POOL||[]);
+  if(typeof DAILY!=='undefined'&&DAILY) arr=arr.concat(DAILY);
+  return arr;
+}
+function findByCodeOrName(s){
+  var code=String(s).replace(/[^0-9]/g,'');
+  var hit=null;
+  allPoolStocks().forEach(function(c){ if(!hit&&(c.code===code||String(c.name).indexOf(s)>=0)) hit=c; });
+  return hit;
+}
+
 
 // ================= 自动股池（读取机器人每日产物） =================
 async function loadAutoPool(){
