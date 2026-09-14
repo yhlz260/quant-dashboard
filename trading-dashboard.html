@@ -40,9 +40,11 @@ nav{width:172px;flex-shrink:0;background:rgba(255,255,255,.72);backdrop-filter:b
 .nav-item{display:flex;align-items:center;gap:11px;padding:12px 14px;font-size:13.5px;color:var(--text2);cursor:pointer;border-radius:10px;border-left:3px solid transparent;transition:all .18s;margin-bottom:3px;font-weight:600;}
 .nav-item:hover{color:var(--text);background:rgba(255,255,255,.9);box-shadow:var(--shadow);}
 .nav-item.active{color:#fff;background:var(--grad);box-shadow:0 6px 18px rgba(111,98,244,.35);}
-main{flex:1;padding:22px 26px;min-width:0;}
+main{flex:1;padding:22px 26px;min-width:0;max-width:none;}
+.view.active{display:block;width:100%;}
 .view-title{font-size:20px;font-weight:800;margin-bottom:3px;background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
 .view-sub{font-size:12.5px;color:var(--text2);margin-bottom:20px;}
+.card{width:100%;}
 
 /* ===== 通用卡片 ===== */
 .card{background:var(--card);backdrop-filter:blur(8px);border:1px solid rgba(217,224,242,.85);border-radius:14px;margin-bottom:18px;box-shadow:var(--shadow);position:relative;overflow:hidden;}
@@ -64,6 +66,7 @@ main{flex:1;padding:22px 26px;min-width:0;}
 /* ===== 表格 ===== */
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th{text-align:left;padding:11px 10px;font-size:11.5px;color:var(--text3);font-weight:700;border-bottom:1px solid rgba(217,224,242,.9);background:linear-gradient(120deg,rgba(79,124,255,.05),rgba(139,92,246,.05));}
+thead th{position:sticky;top:58px;z-index:10;background:var(--bg2);border-bottom:2px solid rgba(111,98,244,.2);}
 td{padding:11px 10px;border-bottom:1px solid rgba(217,224,242,.8);white-space:nowrap;}
 tr:hover td{background:rgba(244,246,253,.7);}
 
@@ -560,6 +563,20 @@ tr:hover td{background:rgba(244,246,253,.7);}
   </div>
 
   <div class="card">
+    <div class="card-hd"><div class="t">📝 我的真实持仓管理</div><div class="meta" id="posMeta">输入你的实际持仓，纪律审计页会自动审计</div></div>
+    <div class="card-bd" style="padding:14px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        <input type="text" id="posCode" placeholder="6位代码如600176" style="flex:0 0 140px;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <input type="text" id="posName" placeholder="名称" style="flex:0 0 100px;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <input type="number" id="posShares" placeholder="股数" style="flex:0 0 100px;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <input type="number" id="posCost" placeholder="成本价" step="0.01" style="flex:0 0 100px;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <button id="posAddBtn" style="padding:8px 16px;border:none;border-radius:8px;background:var(--grad);color:#fff;font-weight:700;font-size:13px;cursor:pointer;">+ 添加</button>
+      </div>
+      <div id="posList" style="margin-top:8px;"></div>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="card-hd"><div class="t">今日调仓记录</div><div class="meta" id="simRebalanceDate">—</div></div>
     <div class="card-bd" id="simRebalanceLog">
       <div style="color:var(--text3);font-size:13px;">每日 15:30 收盘后自动生成调仓明细</div>
@@ -862,7 +879,7 @@ const STOCKS = {
     {code:'sz001872', name:'招商港口', buyLo:22.5, buyHi:23.0, target:25.21, stop:20.57, tier:'swing', note:'箱体波段·60日位置75%·多头高位'},
     {code:'sh688448', name:'磁谷科技', buyLo:63.76, buyHi:65.0, target:73.62, stop:54.61, tier:'swing', note:'用户认可·60日位置80%·多头高位'},
     {code:'sh600309', name:'万华化学', buyLo:72.62, buyHi:73.5, target:80.46, stop:66.81, tier:'swing', note:'箱体波段·60日位置70%·多头高位'},
-    {code:'sh601872', name:'招商轮船', buyLo:19.91, buyHi:20.5, target:23.05, stop:17.88, tier:'swing', note:'强趋势·60日位置86%·S3均线多头'},
+    {code:'sh601872', name:'招商轮船', buyLo:14.0, buyHi:17.0, target:23.0, stop:13.0, tier:'swing', note:'30日线支撑·14低吸/17回踩确认·23止盈·航运周期'},
     {code:'sh600803', name:'新奥股份', buyLo:17.76, buyHi:18.0, target:20.54, stop:16.25, tier:'swing', note:'箱体波段·60日位置88%·多头高位'},
     {code:'sh601398', name:'工商银行', buyLo:7.7, buyHi:7.8, target:8.76, stop:7.08, tier:'swing', note:'箱体波段·60日位置87%·多头高位'},
     {code:'sh601985', name:'中国核电', buyLo:8.63, buyHi:8.8, target:9.77, stop:7.94, tier:'swing', note:'箱体波段·60日位置76%·多头高位'},
@@ -1709,8 +1726,31 @@ document.querySelectorAll('.nav-item').forEach(el => {
     if(view === 'backtest') initBacktestUI();
     if(view === 'tracker'){ initTrackerUI(); renderTrackerView(); }
     if(view === 'portfolio'){ initPortfolioUI(); renderPortfolioView(); }
-    if(view === 'audit') renderAudit();
+    if(view === 'sim'){
+      // 绑定持仓添加按钮
+      var addBtn = document.getElementById('posAddBtn');
+      if(addBtn && !addBtn._bound){
+        addBtn._bound = true;
+        addBtn.addEventListener('click', function(){
+          var code = document.getElementById('posCode').value.trim();
+          var name = document.getElementById('posName').value.trim() || code;
+          var shares = parseInt(document.getElementById('posShares').value);
+          var cost = parseFloat(document.getElementById('posCost').value);
+          if(!code || !shares || !cost || cost<=0){ alert('请填写完整的代码、股数和成本价'); return; }
+          var list = getMyPositions();
+          list.push({code:code, name:name, shares:shares, cost:cost});
+          saveMyPositions(list);
+          renderPosList();
+          document.getElementById('posCode').value='';
+          document.getElementById('posName').value='';
+          document.getElementById('posShares').value='';
+          document.getElementById('posCost').value='';
+        });
+      }
+      renderPosList();
+    }
     if(view === 'factor') renderFactor();
+    if(view === 'audit') renderAudit();
     if(view === 'marketradar') renderMarketRadar();
     if(view === 'signals'){
       var sv = document.getElementById('view-signals');
@@ -3134,35 +3174,80 @@ async function renderTrackerView(){
   status.textContent = '已更新至 ' + new Date().toLocaleTimeString('zh-CN');
 }
 
+// ================= 持仓管理（真实持仓→纪律审计） =================
+var POS_KEY = 'qd_my_positions_v1';
+function getMyPositions(){
+  try { return JSON.parse(localStorage.getItem(POS_KEY) || '[]'); } catch(e){ return []; }
+}
+function saveMyPositions(p){ localStorage.setItem(POS_KEY, JSON.stringify(p)); }
+function renderPosList(){
+  var list = getMyPositions();
+  state.positions = list; // 同步给纪律审计用
+  var html = list.map(function(p, i){
+    var code = p.code.startsWith('sh')||p.code.startsWith('sz') ? p.code : (p.code.charAt(0)==='6'||p.code.charAt(0)==='9'?'sh':'sz')+p.code;
+    var q = (STOCKS.mid.concat(STOCKS.swing,STOCKS.short).find(function(s){return s.code===code;}))||{};
+    q = q._q || null;
+    var curPx = q ? q.val : '—';
+    var pnl = q ? ((parseFloat(q.val)-p.cost)*p.shares).toFixed(0) : '—';
+    var pnlPct = q ? ((parseFloat(q.val)/p.cost-1)*100).toFixed(1)+'%' : '—';
+    var pnlClr = (q && parseFloat(q.val)>=p.cost) ? 'var(--down)' : 'var(--up)';
+    return '<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--border);">'+
+      '<b style="flex:0 0 80px;">'+p.name+'</b>'+
+      '<span style="flex:0 0 80px;color:var(--text3);font-size:12px;">'+p.code+'</span>'+
+      '<span style="flex:0 0 80px;">'+p.shares+'股</span>'+
+      '<span style="flex:0 0 80px;">成本'+p.cost.toFixed(2)+'</span>'+
+      '<span style="flex:0 0 80px;">现价'+curPx+'</span>'+
+      '<span style="flex:0 0 80px;color:'+pnlClr+';font-weight:700;">'+pnl+'('+pnlPct+')</span>'+
+      '<button onclick="removePos('+i+')" style="padding:4px 10px;border:1px solid #e04848;border-radius:6px;background:rgba(224,72,72,.08);color:#e04848;cursor:pointer;font-size:12px;">删除</button>'+
+    '</div>';
+  }).join('');
+  document.getElementById('posList').innerHTML = html || '<div style="color:var(--text3);font-size:13px;padding:10px;">暂无持仓，在上方输入代码+股数+成本价后添加</div>';
+}
+function removePos(i){
+  var list = getMyPositions();
+  list.splice(i,1);
+  saveMyPositions(list);
+  renderPosList();
+}
 // ================= 纪律审计 =================
 function renderAudit(){
   var pos = state.positions || [];
+  if(pos.length === 0){
+    document.getElementById('aChaseRate').textContent = '—';
+    document.getElementById('aStopCnt').textContent = '—';
+    document.getElementById('aNearStop').textContent = '—';
+    document.getElementById('aFlowScore').textContent = '—';
+    document.getElementById('auditDetail').innerHTML = '<div style="text-align:center;color:var(--text3);padding:30px;">暂无持仓记录<br>请在「模拟仓」页面「我的真实持仓管理」区域添加你的实际持仓（代码+股数+成本价）<br>添加后切回本页将自动审计追高率/超止损/流水评分</div>';
+    return;
+  }
   var chaseCnt=0, stopCnt=0, nearStopCnt=0, total=pos.length;
+  var allStocks = STOCKS.mid.concat(STOCKS.swing, STOCKS.short);
   var rows = pos.map(function(p){
-    var s = (typeof findByCodeOrName==='function') ? findByCodeOrName(p.code) : null;
-    if(!s) return '';
-    var px = p._q ? parseFloat(p._q.val) : 0;
-    if(!px) return '';
-    var isChase = px > s.buyHi * 1.05;
-    var isStop = px < s.stop;
-    var distStop = s.stop ? ((px - s.stop)/s.stop*100) : 100;
+    // 持仓格式: {code:'600176', name:'中国巨石', shares:1000, cost:40.5}
+    var fullCode = p.code.startsWith('sh')||p.code.startsWith('sz') ? p.code : (p.code.charAt(0)==='6'||p.code.charAt(0)==='9'?'sh':'sz')+p.code;
+    var s = allStocks.find(function(x){ return x.code === fullCode; });
+    var q = s ? s._q : null;
+    var px = q ? parseFloat(q.val) : p.cost;
+    var buyHi = s ? s.buyHi : p.cost*1.05;
+    var stop = s ? s.stop : p.cost*0.92;
+    var isChase = px > buyHi * 1.05;
+    var isStop = px < stop;
+    var distStop = stop ? ((px - stop)/stop*100) : 100;
     var isNear = distStop < 5 && !isStop;
     if(isChase) chaseCnt++;
     if(isStop) stopCnt++;
     if(isNear) nearStopCnt++;
     var tag = isStop?'<span class="badge b-sell">⚠ 超止损</span>':isNear?'<span class="badge b-wait">接近止损</span>':isChase?'<span class="badge b-sell">追高</span>':'<span class="badge b-buy">正常</span>';
-    return '<tr><td><b>'+p.name+'</b> '+p.code+'</td><td>'+px.toFixed(2)+'</td><td>'+s.buyLo+'-'+s.buyHi+'</td><td class="up">'+s.stop+'</td><td>'+distStop.toFixed(1)+'%</td><td>'+tag+'</td></tr>';
+    return '<tr><td><b>'+p.name+'</b> <span style="color:var(--text3);font-size:11px;">'+fullCode+'</span></td><td>'+px.toFixed(2)+'</td><td>'+(s?s.buyLo+'-'+s.buyHi:'—')+'</td><td class="up">'+stop.toFixed(2)+'</td><td>'+distStop.toFixed(1)+'%</td><td>'+tag+'</td></tr>';
   }).join('');
   var chaseRate = total>0 ? Math.round(chaseCnt/total*100) : 0;
-  var flowScore = total>0 ? Math.round((1-chaseCnt/Math.max(1,total))*0.4 + (1-stopCnt/Math.max(1,total))*0.4 + 0.2*100) : 0;
+  var flowScore = total>0 ? Math.round((1-chaseCnt/Math.max(1,total))*0.4*100 + (1-stopCnt/Math.max(1,total))*0.4*100 + 20) : 0;
   if(flowScore>100) flowScore=100;
   document.getElementById('aChaseRate').textContent = chaseRate+'%';
   document.getElementById('aStopCnt').textContent = stopCnt;
   document.getElementById('aNearStop').textContent = nearStopCnt;
   document.getElementById('aFlowScore').textContent = flowScore;
-  document.getElementById('auditDetail').innerHTML = '<div class="card-hd"><span class="t">持仓逐只审计</span></div>'+
-    '<table><thead><tr><th>标的</th><th>现价</th><th>买点</th><th>止损</th><th>距止损</th><th>状态</th></tr></thead><tbody>'+
-    (rows||'<tr><td colspan=6 style="text-align:center;color:var(--text3);padding:20px;">暂无持仓记录（在模拟仓页面建仓后自动审计）</td></tr>')+'</tbody></table>';
+  document.getElementById('auditDetail').innerHTML = '<table><thead><tr><th>标的</th><th>现价</th><th>买点</th><th>止损</th><th>距止损</th><th>状态</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 // ================= 因子审计 =================
 function renderFactor(){
