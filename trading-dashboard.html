@@ -1367,13 +1367,16 @@ async function render(){
     sigView.innerHTML = '<div class="view-title">⚡ 信号捕捉</div><div class="view-sub">10 池全量扫描 · 100+ 只 · 实时买入/卖出信号 · 14:30-14:55 尾盘窗口自动加强</div>' + viewSignals();
   }
 
-  // 5. 三重仓三色网格（总览页用旧逻辑，仅 23 只核心池）
+  // 5. 三重仓三色网格（仅总览页，23 只核心池；信号捕捉页用 viewSignals() 全池扫描）
   const sigBuckets = {red:[], green:[], yellow:[]};
   for(const x of quickSignals){
     if(sigBuckets[x.sig.type]) sigBuckets[x.sig.type].push(x);
   }
-  ['red','green','yellow'].forEach(t => {
-    const board = document.getElementById('sig'+t.charAt(0).toUpperCase()+t.slice(1));
+  const ovView = document.getElementById('view-overview');
+  if(ovView && ovView.classList.contains('active')){
+    ['red','green','yellow'].forEach(t => {
+      const board = document.getElementById('sig'+t.charAt(0).toUpperCase()+t.slice(1));
+      if(!board) return;
     document.getElementById(t+'Count').textContent = sigBuckets[t].length + ' 只';
     board.innerHTML = sigBuckets[t].length ? sigBuckets[t].map(x => {
       const pct = x.sig.type==='red' ? 95 : x.sig.type==='green' ? 70 : 40;
@@ -1388,7 +1391,8 @@ async function render(){
         <div class="sig-progress"><div class="bar" style="width:${pct}%;"></div></div>
       </div>`;
     }).join('') : '<div class="sig-empty">暂无信号</div>';
-  });
+    });
+  }
 
   // 5. 三层仓表格
   for(const [tierId, tierName] of [['mid','中长线·压舱石'],['swing','波段·弹性'],['short','短线·机动']]){
@@ -1925,6 +1929,9 @@ function sigCard(it){
   var s=it.sig;
   var cls = s.type==='weak' ? 'yellow' : (s.flash===false ? 'green' : 'red');
   var badgeCls = cls==='red'?'red-b':cls==='green'?'green-b':'yellow-b';
+  // HTML 转义：desc/name 里可能含 < > & 等字符（如 <EMA144），不转义会导致 parser 吞掉后续卡片
+  function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  var desc = esc(s.desc);
   var res = it.resonance?'<span class="badge b-tag" style="font-size:9.5px;padding:1px 6px;">共振</span>':'';
   var hitB = (it.hitN&&it.hitN>=2)?'<span class="badge b-tag" style="font-size:9.5px;padding:1px 6px;background:rgba(99,102,241,.12);color:#6366F1;border:1px solid rgba(99,102,241,.3);">命中'+it.hitN+'信号</span>':'';
   return `<div class="sig-card ${cls}" data-code="${it.code}" data-name="${it.name}" style="cursor:pointer;">
@@ -1934,7 +1941,7 @@ function sigCard(it){
       <span class="sig-tag ${s.tag}">${it.pool}</span>${res}${hitB}
     </div>
     <div><span class="sig-badge ${badgeCls}">${s.name}</span></div>
-    <div class="sig-desc">${s.desc}</div>
+    <div class="sig-desc">${desc}</div>
   </div>`;
 }
 function viewSignals(){
@@ -1958,7 +1965,7 @@ function viewSignals(){
       return `<div class="sig-card ${cls}" data-code="${it.code}" data-name="${it.name}" style="cursor:pointer;border-color:${border};">
         <div class="sig-top"><span class="sig-name">${it.name}</span><span class="sig-code">${it.code}</span><span class="sig-tag sh">${it.pool}</span></div>
         <div><span class="sig-badge ${badge}">${s.name}</span></div>
-        <div class="sig-desc">${s.desc}</div></div>`;
+        <div class="sig-desc">${desc}</div></div>`;
     }
     var topHtml = tops.length ? tops.map(function(it){return card(it,'rgba(234,102,104,.5)','red','red-b');}).join('')
       : '<div class="sig-empty" style="grid-column:1/-1;color:var(--text3);">当前无高位见顶信号 · 高位放量滞涨/烧香线/子午峰值下拐</div>';
@@ -1985,10 +1992,11 @@ function viewSignals(){
   ${(function(){var bl=sig.escapeBlocked||[];if(!bl.length)return '';return `<div class="card" style="margin-top:14px;border:1px dashed rgba(234,102,104,.55);">
     <div class="card-hd"><span class="t" style="color:#C2414C;">⚠️ 逃顶压制 · 已移出开仓池</span><span class="meta">同名标的命中逃顶信号（S7/S26/S2/S24）· 逃顶优先于一切买入 · 触发即至少减半 · 禁止开仓</span></div>
     <div class="card-bd" style="padding:14px;"><div class="sig-board">${bl.map(function(it){
-      return `<div class="sig-card red" style="border-color:rgba(234,102,104,.35);opacity:.85;" data-code="${it.code}" data-name="${it.name}" style="cursor:pointer;">
+      return `<div class="sig-card red" style="border-color:rgba(234,102,104,.35);opacity:.85;cursor:pointer;" data-code="${it.code}" data-name="${it.name}">
         <div class="sig-top"><span class="sig-name">${it.name}</span><span class="sig-code">${it.code}</span><span class="sig-tag sh">开仓信号</span></div>
         <div><span class="sig-badge red-b">被逃顶压制：${it.sig.name}</span></div>
-        <div class="sig-desc">${it.sig.desc} · 逃顶优先，触发即至少减半，禁止新开仓</div></div>`;}).join('')}</div></div>
+        <div class="sig-desc">${it.sig.desc} · 逃顶优先，触发即至少减半，禁止新开仓</div>
+      </div>`;}).join('')}</div></div>
   </div>`;})()}
   <div class="card" style="margin-top:14px;">
     <div class="card-hd"><span class="t">🔍 弱信号股票池</span><span class="meta">MACD转正未到买点 / 低位企稳 / 回踩未到位</span></div>
