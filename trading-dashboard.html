@@ -171,6 +171,7 @@ tr:hover td{background:rgba(244,246,253,.7);}
 <nav>
   <div class="nav-item active" data-view="overview">📊 总览</div>
   <div class="nav-item" data-view="signals">⚡ 信号捕捉</div>
+  <div class="nav-item" data-view="marketradar">🔥 全市场雷达</div>
   <div class="nav-item" data-view="tiers">🏛️ 三重仓决策</div>
   <div class="nav-item" data-view="swing">🎯 波段监控</div>
   <div class="nav-item" data-view="regime">🔄 市场 Regime</div>
@@ -297,20 +298,44 @@ tr:hover td{background:rgba(244,246,253,.7);}
 </div>
 
 <!-- ========== 三重仓决策 ========== -->
+<div class="view" id="view-marketradar">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <h2 style="margin:0;">🔥 全市场雷达</h2>
+      <span id="mrMeta" style="font-size:12px;color:var(--text3);">全市场 5000+ 只实时扫描 · 15秒自动刷新</span>
+    </div>
+    <p style="font-size:12.5px;color:var(--text2);margin:0 0 12px;">沪深A股动态榜单（东财实时接口），覆盖全部板块与概念——不限于自选股池。点击任意标的直达个股详情页。</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <div>
+        <h3 style="margin:0 0 8px;font-size:14px;">🚀 涨幅榜 Top15</h3>
+        <div id="mrGainers"><div class="sig-empty">加载中…</div></div>
+      </div>
+      <div>
+        <h3 style="margin:0 0 8px;font-size:14px;">💵 成交额榜 Top15</h3>
+        <div id="mrTurnover"><div class="sig-empty">加载中…</div></div>
+      </div>
+    </div>
+    <div style="margin-top:14px;">
+      <h3 style="margin:0 0 8px;font-size:14px;">🧭 概念板块涨幅榜 Top10</h3>
+      <div id="mrSectors"><div class="sig-empty">加载中…</div></div>
+    </div>
+  </div>
+</div>
+
 <div class="view" id="view-tiers">
   <div class="view-title">🏛️ 三重仓决策</div>
-  <div class="view-sub">中长线 50% · 波段 30% · 短线 20% · 当前大盘弱势，建议实际仓位：60-75%</div>
+  <div class="view-sub">基线 中长线 15% · 波段 5% · 短线 3%，实际仓位由大盘 Regime 动态调节（见市场 Regime 页）</div>
 
   <div class="card">
-    <div class="card-hd"><div class="t" style="color:var(--purple);">中长线层 · 压舱石</div><div class="meta">建议仓位 30-40%（低于目标50%）</div></div>
+    <div class="card-hd"><div class="t" style="color:var(--purple);">中长线层 · 压舱石</div><div class="meta">基线仓位 15%（Regime 倍率动态调节）</div></div>
     <div class="card-bd"><div id="tierMid"></div></div>
   </div>
   <div class="card">
-    <div class="card-hd"><div class="t" style="color:var(--accent);">波段层 · 弹性</div><div class="meta">建议仓位 20-25%</div></div>
+    <div class="card-hd"><div class="t" style="color:var(--accent);">波段层 · 弹性</div><div class="meta">基线仓位 5%（Regime 倍率动态调节）</div></div>
     <div class="card-bd"><div id="tierSwing"></div></div>
   </div>
   <div class="card">
-    <div class="card-hd"><div class="t" style="color:var(--up);">短线层 · 机动</div><div class="meta">⚠️ 大盘弱势，减半甚至空仓</div></div>
+    <div class="card-hd"><div class="t" style="color:var(--up);">短线层 · 机动</div><div class="meta">基线仓位 3%（Regime 倍率动态调节）</div></div>
     <div class="card-bd"><div id="tierShort"></div></div>
   </div>
 </div>
@@ -1156,6 +1181,47 @@ async function fetchQuote(code){
   }
 }
 
+// 批量行情：东财 ulist 一次拉全池（指数+全部标的），fltt=2 返回小数无需 /100；失败自动回退逐只
+async function fetchQuotesBatch(secids){
+  try{
+    const res = await fetch(`https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&fields=f2,f3,f4,f12,f13,f14,f18&secids=${secids.join(',')}&_=${Date.now()}`);
+    const json = await res.json();
+    const diff = json && json.data && json.data.diff;
+    if(!Array.isArray(diff) || !diff.length) throw new Error('no batch data');
+    const map = {};
+    for(const d of diff){
+      const code = (d.f13 === 1 ? 'sh' : 'sz') + d.f12;
+      if(d.f2 === '-' || d.f2 == null || isNaN(parseFloat(d.f2))) continue; // 停牌/无效，留给回退
+      map[code] = { name: d.f14 || code, val: String(d.f2), chg: String(d.f3), chgVal: String(d.f4), prev: parseFloat(d.f18) };
+    }
+    return map;
+  }catch(e){ return null; }
+}
+
+// 全池行情刷新：批量1次请求（含指数），失败的标的逐只回退
+async function refreshAllQuotes(){
+  const allStocks = [...STOCKS.mid, ...STOCKS.swing, ...STOCKS.short];
+  const secids = INDICES.map(i => code2secid(i.code)).concat(allStocks.map(s => code2secid(s.code)));
+  const batch = await fetchQuotesBatch(secids);
+  for(const idx of INDICES){
+    const q = batch && batch[idx.code];
+    if(q) window['_q_'+idx.id] = q;
+    else {
+      const one = await fetchQuote(idx.code);
+      if(one) window['_q_'+idx.id] = one;
+    }
+  }
+  for(const s of allStocks){
+    const q = batch && batch[s.code];
+    if(q) s._q = q;
+    else {
+      const one = await fetchQuote(s.code);
+      if(one) s._q = one;
+    }
+  }
+  return batch;
+}
+
 // ================= 信号判定 =================
 // 简化的信号：基于现价相对买点区间、MA20等做三色分类
 function classifySignal(stock, quote){
@@ -1197,12 +1263,25 @@ function swingProgress(stock, quote){
 
 // ================= 渲染 =================
 async function render(){
-  // 0. P0-3：先抓大盘 regime（供 sim 仓位倍率使用，renderRiskView 会复用）
-  try{ window._regime = await getMarketRegime(); }catch(e){ window._regime = {mult:0.7, label:'数据缺失', allowBuy:true, avg:0, level:'unknown', color:'#8b94ad'}; }
+  // 0. 批量拉全池行情（1次请求，指数+23标的；5s 轮询无压力）
+  await refreshAllQuotes();
 
-  // 1. Ticker 大盘
+  // 0.5 P0-3：大盘 regime（直接复用已刷新的指数缓存；无缓存才走旧兜底链）
+  try{
+    const idxQuotes = INDICES.map(idx => window['_q_'+idx.id]).filter(q => q && !isNaN(parseFloat(q.chg)));
+    if(idxQuotes.length){
+      const avg = idxQuotes.reduce((acc,q)=>acc+parseFloat(q.chg),0)/idxQuotes.length;
+      window._regime = avg > 0.3 ? {level:'strong', avg, mult:1.0, label:'强势·满仓基线', allowBuy:true, color:'#18a06b'}
+        : avg > -0.3 ? {level:'neutral', avg, mult:0.7, label:'震荡·仓位×0.7', allowBuy:true, color:'#e08a1e'}
+        : {level:'weak', avg, mult:0.4, label:'弱势·仓位×0.4·只低吸', allowBuy:false, color:'#e04848'};
+    } else {
+      window._regime = await getMarketRegime();
+    }
+  }catch(e){ window._regime = {mult:0.7, label:'数据缺失', allowBuy:true, avg:0, level:'unknown', color:'#8b94ad'}; }
+
+  // 1. Ticker 大盘（数据已在 refreshAllQuotes 中更新）
   for(const idx of INDICES){
-    const q = await fetchQuote(idx.code);
+    const q = window['_q_'+idx.id];
     if(q){
       window['_q_'+idx.id] = q;
       const vEl = document.getElementById('tk-'+idx.id);
@@ -1219,12 +1298,11 @@ async function render(){
     return `<div class="kpi"><div class="l">${idx.name}</div><div class="v">${q?q.val:'—'}</div><div class="s ${q && parseFloat(q.chg)>=0?'up':'down'}">${q?(parseFloat(q.chg)>=0?'+':'')+q.chg+'%':'—'}</div></div>`;
   }).join('');
 
-  // 3. 快速信号（总览页顶部）
+  // 3. 快速信号（总览页顶部）——行情已批量刷新，直接读缓存
   const allStocks = [...STOCKS.mid, ...STOCKS.swing, ...STOCKS.short];
   const quickSignals = [];
   for(const s of allStocks){
-    const q = await fetchQuote(s.code);
-    s._q = q;
+    const q = s._q;
     if(!q) continue;
     const sig = classifySignal(s, q);
     if(sig) quickSignals.push({ stock:s, quote:q, sig });
@@ -1464,8 +1542,62 @@ document.querySelectorAll('.nav-item').forEach(el => {
     if(view === 'backtest') initBacktestUI();
     if(view === 'tracker'){ initTrackerUI(); renderTrackerView(); }
     if(view === 'portfolio'){ initPortfolioUI(); renderPortfolioView(); }
+    if(view === 'marketradar') renderMarketRadar();
   });
 });
+// 全市场雷达：仅当该视图激活时每15秒刷新（榜单独立于5秒行情主循环）
+
+// ================= 全市场雷达（东财 clist 动态榜单，全市场扫描） =================
+// 域名轮询：push2 → 92子域 → push2delay（实测办公网DPI拦 clist 主域、delay 域通；delay 数据约延迟15秒，榜单可接受）
+// 注意：fs 参数中的 + 必须编码为 %2B（裸 + 被部分代理改写导致请求异常）
+var CLIST_HOSTS = ['https://push2.eastmoney.com','https://92.push2.eastmoney.com','https://push2delay.eastmoney.com'];
+async function clistFetch(fsEnc, fid, pz, fields){
+  for(var i=0;i<CLIST_HOSTS.length;i++){
+    try{
+      const res = await fetch(CLIST_HOSTS[i]+'/api/qt/clist/get?pn=1&pz='+pz+'&po=1&np=1&fltt=2&invt=2&fid='+fid+'&fs='+fsEnc+'&fields='+fields+'&_='+Date.now());
+      const json = await res.json();
+      const diff = json && json.data && json.data.diff;
+      if(Array.isArray(diff) && diff.length) return diff;
+    }catch(e){ /* 换下一域名 */ }
+  }
+  return null;
+}
+async function fetchEmBoard(fid, pz){
+  return clistFetch('m:0%2Bt:6,m:0%2Bt:80,m:1%2Bt:2,m:1%2Bt:23', fid, pz, 'f2,f3,f12,f13,f14,f6');
+}
+async function fetchEmSectors(pz){
+  return clistFetch('m:90%2Bt:2', 'f3', pz, 'f3,f12,f14,f128');
+}
+function mrStockRow(d, rank){
+  const code = (d.f13 === 1 ? 'sh' : 'sz') + d.f12;
+  const px = (d.f2 === '-' || d.f2 == null) ? '—' : d.f2;
+  const chg = d.f3 == null ? 0 : parseFloat(d.f3);
+  const amt = (d.f6 != null && !isNaN(parseFloat(d.f6))) ? (parseFloat(d.f6)/1e8).toFixed(1) + '亿' : '—';
+  return `<tr onclick="window.open('stock_page.html?code=${code}','_blank')" style="cursor:pointer;">
+    <td style="width:34px;color:var(--text3);">${rank}</td>
+    <td><b>${d.f14}</b><br><span style="color:var(--text3);font-size:11px;">${code}</span></td>
+    <td><b>${px}</b></td>
+    <td class="${chg>=0?'up':'down'}" style="font-weight:700;">${chg>=0?'+':''}${chg}%</td>
+    <td style="color:var(--text2);">${amt}</td>
+  </tr>`;
+}
+async function renderMarketRadar(){
+  const [gainers, turnover, sectors] = await Promise.all([fetchEmBoard('f3',15), fetchEmBoard('f6',15), fetchEmSectors(10)]);
+  const mk = (list, fn) => (list && list.length) ? `<table><tbody>${list.map(fn).join('')}</tbody></table>` : '<div class="sig-empty">数据加载失败（网络波动将自动恢复）</div>';
+  document.getElementById('mrGainers').innerHTML = mk(gainers, (d,i)=>mrStockRow(d,i+1));
+  document.getElementById('mrTurnover').innerHTML = mk(turnover, (d,i)=>mrStockRow(d,i+1));
+  document.getElementById('mrSectors').innerHTML = mk(sectors, (d,i)=>{
+    const chg = d.f3 == null ? 0 : parseFloat(d.f3);
+    return `<tr style="cursor:default;">
+      <td style="width:34px;color:var(--text3);">${i+1}</td>
+      <td><b>${d.f14}</b></td>
+      <td class="${chg>=0?'up':'down'}" style="font-weight:700;width:80px;">${chg>=0?'+':''}${chg}%</td>
+      <td style="color:var(--text3);font-size:12px;">${d.f128 ? '领涨: '+d.f128 : ''}</td>
+    </tr>`;
+  });
+  const meta = document.getElementById('mrMeta');
+  if(meta) meta.textContent = '全市场 5000+ 只实时扫描 · 更新于 ' + new Date().toLocaleTimeString('zh-CN',{hour12:false});
+}
 
 // ================= 自动股池（读取机器人每日产物） =================
 async function loadAutoPool(){
@@ -2268,7 +2400,11 @@ function initPortfolioUI(){
 // ================= 启动 =================
 applyTodayLabels();
 render();
-setInterval(render, 10000);
+setInterval(render, 5000);
+// 全市场雷达：仅当该视图激活时每15秒刷新（榜单独立于5秒行情主循环）
+setInterval(function(){
+  if(document.getElementById('view-marketradar').classList.contains('active')) renderMarketRadar();
+}, 15000);
 </script>
 </body>
 </html>
